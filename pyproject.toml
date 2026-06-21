@@ -1,0 +1,62 @@
+[project]
+name = "trajectoryflow"
+version = "0.1.0"
+description = "Learning cellular dynamics from SCI-FATE2 using flow matching and generative models."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "ZanderNic" }
+]
+keywords = [
+    "single-cell",
+    "scRNA-seq",
+    "SCI-FATE2",
+    "cell-dynamics",
+    "flow-matching",
+    "diffusion-models",
+    "bioinformatics",
+    "computational-biology",
+]
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "scanpy",
+    "anndata",
+    "requests",
+    "tqdm",
+    "torch",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[project.urls]
+Repository = "https://github.com/ZanderNic/trajectoryflow"
+
+[project.scripts]
+fateflow = "trajectoryflow.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trajectoryflow"]
