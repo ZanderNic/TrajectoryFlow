@@ -9,13 +9,14 @@ scifate_data = loader.load(
     features_path="data/processed/scifate2_mtx/features.tsv",
 )
 
-print("=== DATASET INFO ===")
-
-print("Expression matrix shape:")
+print("\n=== DATASET SHAPE ===")
 print(scifate_data.expression_matrix.shape)
 
-print("\nCell info:")
+print("\n=== CELL INFO ===")
 print(scifate_data.cell_info.head())
 
-print("\nGene info:")
-print(scifate_data.gene_info.head())
+print("\n=== CELLS PER TIMEPOINT ===")
+print(scifate_data.cell_info["time"].value_counts())
+
+print("\n=== NUMBER OF GENES ===")
+print(len(scifate_data.gene_info))
