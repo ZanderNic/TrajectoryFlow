@@ -3,6 +3,9 @@ data/processed
 data/raw
 data/tmp
 
+# Runs
+runs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
