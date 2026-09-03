@@ -28,6 +28,7 @@ dependencies = [
     "requests",
     "tqdm",
     "torch",
+    "pytest"
 ]
 
 [project.optional-dependencies]

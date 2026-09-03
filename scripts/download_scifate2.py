@@ -1,5 +1,6 @@
-from __future__ import annotations
 
+# std-lib imports
+from __future__ import annotations
 import argparse
 import json
 import re
@@ -7,6 +8,7 @@ import zlib
 from pathlib import Path
 from typing import Dict, Optional
 
+# 3 party imports
 import anndata as ad
 import h5py
 import numpy as np
@@ -226,13 +228,66 @@ def clean_value(value) -> str:
     return text
 
 
+def timepoint_to_hours(value) -> float:
+    """
+    Convert a SCI-FATE2 timepoint label to hours.
+
+    Examples:
+        "05h" -> 5.0
+        "5h"  -> 5.0
+        "D7"  -> 168.0
+        "D8"  -> 192.0
+    """
+    if pd.isna(value):
+        raise ValueError("Timepoint values must not be missing.")
+
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        hours = float(value)
+    else:
+        text = str(value).strip().lower().replace(" ", "")
+
+        hour_match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)h(?:ours?)?", text)
+        day_prefix_match = re.fullmatch(r"d(?:ay)?([0-9]+(?:\.[0-9]+)?)", text)
+        day_suffix_match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)d(?:ays?)?", text)
+        numeric_match = re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", text)
+
+        if hour_match:
+            hours = float(hour_match.group(1))
+        elif day_prefix_match:
+            hours = float(day_prefix_match.group(1)) * 24.0
+        elif day_suffix_match:
+            hours = float(day_suffix_match.group(1)) * 24.0
+        elif numeric_match:
+            hours = float(text)
+        else:
+            raise ValueError(
+                f"Unsupported timepoint format {value!r}. "
+                "Expected values such as '05h', '5h', 'D7', or '7d'."
+            )
+
+    if not np.isfinite(hours) or hours < 0:
+        raise ValueError(f"Invalid timepoint {value!r}: time in hours must be finite and >= 0.")
+
+    return hours
+
+
+def normalize_timepoint_label(value) -> str:
+    """Return a canonical '<hours>h' label with days converted to hours."""
+    hours = timepoint_to_hours(value)
+
+    if float(hours).is_integer():
+        return f"{int(hours)}h"
+
+    return f"{hours:g}h"
+
+
 def safe_path_component(value) -> str:
     """
     Turn a metadata value into a safe folder name.
 
     Example:
         "4 h" -> "4h"
-        "day/3" -> "day-3"
+        "D7" -> "168h" after timepoint normalization
     """
     text = clean_value(value)
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
@@ -621,7 +676,7 @@ class CSRBuilder:
 def get_timepoint_groups(
     obs: pd.DataFrame,
     timepoint_column: str,
-) -> list[tuple[object, np.ndarray]]:
+) -> list[tuple[str, np.ndarray]]:
     if timepoint_column not in obs.columns:
         raise KeyError(
             f"Timepoint column '{timepoint_column}' not found in obs. "
@@ -633,36 +688,21 @@ def get_timepoint_groups(
     if values.isna().any():
         n_missing = int(values.isna().sum())
         raise ValueError(
-            f"Timepoint column '{timepoint_column}' contains "
-            f"{n_missing} missing values."
+            f"Timepoint column '{timepoint_column}' contains {n_missing} missing values."
         )
 
     groups = []
 
-    # sort=False preserves the order in which timepoints first appear.
-    for timepoint, group in obs.groupby(
-        timepoint_column,
-        sort=False,
-        observed=True,
-    ):
+    for timepoint, group in obs.groupby(timepoint_column, sort=False, observed=True):
         row_indices = group.index.to_numpy()
-
-        # obs index may not be positional integers, therefore convert through
-        # pandas' positional lookup.
         positions = obs.index.get_indexer(row_indices)
 
         if (positions < 0).any():
-            raise RuntimeError(
-                f"Could not map all rows for timepoint {timepoint!r}."
-            )
+            raise RuntimeError(f"Could not map all rows for timepoint {timepoint!r}.")
 
-        groups.append(
-            (
-                timepoint,
-                positions.astype(np.int64),
-            )
-        )
+        groups.append((str(timepoint), positions.astype(np.int64)))
 
+    groups.sort(key=lambda item: timepoint_to_hours(item[0]))
     return groups
 
 
@@ -800,6 +840,34 @@ def write_processed_dataset(
 
     print(f"[metadata] Reading metadata from: {h5ad_path}")
     cell_ids, gene_ids, obs, var = read_metadata(h5ad_path)
+
+    if timepoint_column not in obs.columns:
+        raise KeyError(
+            f"Timepoint column '{timepoint_column}' not found in obs. "
+            f"Available columns: {list(obs.columns)}"
+        )
+
+    raw_timepoints = obs[timepoint_column].copy()
+
+    if raw_timepoints.isna().any():
+        n_missing = int(raw_timepoints.isna().sum())
+        raise ValueError(
+            f"Timepoint column '{timepoint_column}' contains {n_missing} missing values."
+        )
+
+    timepoint_mapping = {
+        str(value): normalize_timepoint_label(value)
+        for value in pd.unique(raw_timepoints)
+    }
+
+    obs[timepoint_column] = raw_timepoints.map(normalize_timepoint_label)
+
+    print("[timepoints] Normalized to hours:")
+    for original, normalized in sorted(
+        timepoint_mapping.items(),
+        key=lambda item: timepoint_to_hours(item[1]),
+    ):
+        print(f"  {original!r} -> {normalized!r}")
 
     with h5py.File(h5ad_path, "r") as h5:
         if "layers" not in h5:
@@ -971,6 +1039,17 @@ def write_processed_dataset(
                 "mask is required."
             ),
         },
+        "timepoints": {
+            "column": timepoint_column,
+            "unit": "hours",
+            "format": "<hours>h",
+            "mapping_from_source": timepoint_mapping,
+            "note": (
+                "All processed timepoints use hours. Day labels are multiplied by 24 "
+                "and leading zeros are removed, e.g. '05h' -> '5h', "
+                "'D7' -> '168h', and 'D8' -> '192h'."
+            ),
+        },
         "storage": {
             "matrix_format": "scipy_csr_npz",
             "matrix_orientation": "cells-by-genes",
@@ -998,12 +1077,14 @@ def write_processed_dataset(
     # 5. Manifest used later by ScifateStore.
     # -----------------------------------------------------------------
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "dataset": dataset,
         "geo_accession": GEO_ACCESSION,
         "n_cells": int(n_cells),
         "n_genes": int(n_selected_genes),
         "timepoint_column": timepoint_column,
+        "timepoint_unit": "hours",
+        "timepoint_format": "<hours>h",
         "genes": str(
             genes_path.relative_to(output_dir)
         ),

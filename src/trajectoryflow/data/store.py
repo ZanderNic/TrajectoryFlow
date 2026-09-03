@@ -25,17 +25,25 @@ class TimepointData:
     def __len__(self) -> int:
         return self.n_cells
 
+
     @property
     def n_cells(self) -> int:
         return self.expression.shape[0]
+
 
     @property
     def n_genes(self) -> int:
         return self.expression.shape[1]
 
+
     @property
     def shape(self) -> tuple[int, int]:
         return self.expression.shape
+
+    @property
+    def time_hours(self) -> float:
+        return float(self.timepoint.removesuffix("h"))
+
 
     def __repr__(self) -> str:
         return (
