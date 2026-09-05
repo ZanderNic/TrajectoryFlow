@@ -487,18 +487,27 @@ def prepare_row_outputs(
     new_reader: H5LayerReader,
     gene_map: np.ndarray,
     clip_ratio: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
     """
-        Process one cell.
+    Process one cell.
 
-        Returns:
-            activation_cols
-            activation_values
-            ntr_cols
-            ntr_values
+    Returns:
+        activation_cols
+        activation_values
+        new_cols
+        new_values
+        ntr_cols
+        ntr_values
 
-        NTR is computed as new / total only for genes where both values exist
-        and total > 0.
+    NTR is computed as new / total only for genes where both values exist
+    and total > 0.
     """
     total_cols_orig, total_values = activation_reader.get_row(row)
     new_cols_orig, new_values = new_reader.get_row(row)
@@ -531,13 +540,20 @@ def prepare_row_outputs(
         activation_cols = np.array([], dtype=np.int64)
         activation_values = np.array([], dtype=np.float32)
 
-    if (
-        len(new_cols_new) == 0
-        or len(total_cols_orig_kept) == 0
-    ):
+    if len(new_cols_new) > 0:
+        new_order = np.argsort(new_cols_new)
+        new_cols = new_cols_new[new_order]
+        new_values_output = new_values[new_order]
+    else:
+        new_cols = np.array([], dtype=np.int64)
+        new_values_output = np.array([], dtype=np.float32)
+
+    if len(new_cols_new) == 0 or len(total_cols_orig_kept) == 0:
         return (
             activation_cols,
             activation_values,
+            new_cols,
+            new_values_output,
             np.array([], dtype=np.int64),
             np.array([], dtype=np.float32),
         )
@@ -546,10 +562,7 @@ def prepare_row_outputs(
     total_cols_orig_sorted = total_cols_orig_kept[total_order]
     total_values_sorted = total_values[total_order]
 
-    positions = np.searchsorted(
-        total_cols_orig_sorted,
-        new_cols_orig_kept,
-    )
+    positions = np.searchsorted(total_cols_orig_sorted, new_cols_orig_kept)
 
     valid = positions < len(total_cols_orig_sorted)
     valid[valid] &= (
@@ -561,32 +574,26 @@ def prepare_row_outputs(
         return (
             activation_cols,
             activation_values,
+            new_cols,
+            new_values_output,
             np.array([], dtype=np.int64),
             np.array([], dtype=np.float32),
         )
 
     matched_total = total_values_sorted[positions[valid]]
-
     ntr_cols = new_cols_new[valid]
 
     ntr_values = np.divide(
         new_values[valid],
         matched_total,
-        out=np.zeros_like(
-            new_values[valid],
-            dtype=np.float32,
-        ),
+        out=np.zeros_like(new_values[valid], dtype=np.float32),
         where=matched_total > 1e-12,
     )
 
     if clip_ratio:
         ntr_values = np.clip(ntr_values, 0.0, 1.0)
 
-    keep_ntr = (
-        np.isfinite(ntr_values)
-        & (ntr_values != 0)
-    )
-
+    keep_ntr = np.isfinite(ntr_values) & (ntr_values != 0)
     ntr_cols = ntr_cols[keep_ntr]
     ntr_values = ntr_values[keep_ntr]
 
@@ -598,6 +605,8 @@ def prepare_row_outputs(
     return (
         activation_cols,
         activation_values,
+        new_cols,
+        new_values_output,
         ntr_cols,
         ntr_values,
     )
@@ -723,6 +732,7 @@ def write_timepoint(
     timepoint_dir.mkdir(parents=True, exist_ok=True)
 
     expression_builder = CSRBuilder(n_cols=n_selected_genes)
+    new_builder = CSRBuilder(n_cols=n_selected_genes)
     ntr_builder = CSRBuilder(n_cols=n_selected_genes)
 
     print(
@@ -737,6 +747,8 @@ def write_timepoint(
         (
             activation_cols,
             activation_values,
+            new_cols,
+            new_values,
             ntr_cols,
             ntr_values,
         ) = prepare_row_outputs(
@@ -751,23 +763,35 @@ def write_timepoint(
             activation_cols,
             activation_values,
         )
+        new_builder.append(
+            new_cols,
+            new_values,
+        )
         ntr_builder.append(
             ntr_cols,
             ntr_values,
         )
 
     expression = expression_builder.build()
+    new = new_builder.build()
     ntr = ntr_builder.build()
 
     expression_path = timepoint_dir / "expression.npz"
+    new_path = timepoint_dir / "new.npz"
     ntr_path = timepoint_dir / "ntr.npz"
 
     print(f"[write] {expression_path}")
+    print(f"[write] {new_path}")
     print(f"[write] {ntr_path}")
 
     sparse.save_npz(
         expression_path,
         expression,
+        compressed=compressed_npz,
+    )
+    sparse.save_npz(
+        new_path,
+        new,
         compressed=compressed_npz,
     )
     sparse.save_npz(
@@ -784,6 +808,7 @@ def write_timepoint(
     )
 
     relative_expression = expression_path.relative_to(output_dir)
+    relative_new = new_path.relative_to(output_dir)
     relative_ntr = ntr_path.relative_to(output_dir)
     relative_obs = obs_path.relative_to(output_dir)
 
@@ -793,9 +818,11 @@ def write_timepoint(
         "n_cells": int(len(row_indices)),
         "n_genes": int(n_selected_genes),
         "expression": str(relative_expression),
+        "new": str(relative_new),
         "ntr": str(relative_ntr),
         "obs": str(relative_obs),
         "expression_nnz": int(expression.nnz),
+        "new_nnz": int(new.nnz),
         "ntr_nnz": int(ntr.nnz),
     }
 
@@ -830,10 +857,11 @@ def write_processed_dataset(
             timepoints/
                 <timepoint>/
                     expression.npz
+                    new.npz
                     ntr.npz
                     obs.parquet | obs.csv
 
-    Every expression/NTR matrix has shape:
+    Every expression/new/NTR matrix has shape:
         [cells_at_timepoint, globally_selected_genes]
     """
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1029,6 +1057,14 @@ def write_processed_dataset(
             ),
             "global_selection": True,
         },
+        "new_rna": {
+            "source_layer": new_layer,
+            "stored_sparse": True,
+            "note": (
+                "The selected-gene subset of the source new-RNA layer is stored "
+                "directly for models such as Velvet that require total and new RNA."
+            ),
+        },
         "ntr": {
             "definition": "new / total",
             "clip_to_0_1": bool(clip_ratio),
@@ -1077,7 +1113,7 @@ def write_processed_dataset(
     # 5. Manifest used later by ScifateStore.
     # -----------------------------------------------------------------
     manifest = {
-        "format_version": 2,
+        "format_version": 3,
         "dataset": dataset,
         "geo_accession": GEO_ACCESSION,
         "n_cells": int(n_cells),

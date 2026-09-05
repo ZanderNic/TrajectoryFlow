@@ -19,6 +19,7 @@ class TimepointData:
 
     timepoint: str
     expression: sparse.csr_matrix
+    new: sparse.csr_matrix
     ntr: sparse.csr_matrix
     obs: pd.DataFrame
 
@@ -263,17 +264,14 @@ class ScifateStore:
             self.root / spec["expression"]
         ).tocsr()
 
-        ntr = sparse.load_npz(
-            self.root / spec["ntr"]
-        ).tocsr()
-
-        obs = self._read_table(
-            self.root / spec["obs"]
-        )
+        ntr = sparse.load_npz(self.root / spec["ntr"]).tocsr()
+        new = sparse.load_npz(self.root / spec["new"])
+        obs = self._read_table(self.root / spec["obs"])
 
         data = TimepointData(
             timepoint=key,
             expression=expression,
+            new=new, 
             ntr=ntr,
             obs=obs,
         )
@@ -466,6 +464,12 @@ class ScifateStore:
                 f"{len(data.obs)} vs "
                 f"{data.n_cells} cells."
             )
+
+        if data.expression.shape != data.new.shape or data.expression.shape != data.ntr.shape:
+            raise ValueError(
+                        f"Matrix shape mismatch for timepoint '{key}': "
+                        f"expression={data.expression.shape}, new={data.new.shape}, ntr={data.ntr.shape}"
+                    )
 
     # ------------------------------------------------------------------
     # Internal helpers

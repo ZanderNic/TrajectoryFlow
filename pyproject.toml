@@ -5,9 +5,11 @@ description = "Learning cellular dynamics from SCI-FATE2 using flow matching and
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+
 authors = [
     { name = "ZanderNic" }
 ]
+
 keywords = [
     "single-cell",
     "scRNA-seq",
@@ -28,7 +30,7 @@ dependencies = [
     "requests",
     "tqdm",
     "torch",
-    "pytest"
+    "scikit-learn",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +50,13 @@ fateflow = "trajectoryflow.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trajectoryflow"]
+
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -55,9 +64,7 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/trajectoryflow"]
