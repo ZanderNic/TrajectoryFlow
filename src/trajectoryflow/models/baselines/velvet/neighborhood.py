@@ -79,15 +79,20 @@ def neighborhood_projection(
     sigma: float = 1.0,
 ) -> torch.Tensor:
     """
-    Expected local displacement under the velocity-guided transition weights.
+    Project velocity onto the local neighborhood.
 
-    The paper additionally references a correction for non-uniform sampling
-    density. That correction is intentionally not guessed here.
+    Matches the official Velvet NeighborhoodConstraint.project()
+    implementation.
     """
-    if neighbor_z.ndim != 3:
-        raise ValueError("neighbor_z must have shape [batch, n_neighbors, n_latent].")
+    if neighbor_z.dim() != 3:
+        raise ValueError(
+            "neighbor_z must have shape [batch, n_neighbors, n_latent]."
+        )
+
     if neighbor_z.shape[0] != z.shape[0]:
-        raise ValueError("neighbor_z and z must share the batch dimension.")
+        raise ValueError(
+            "neighbor_z and z must share the batch dimension."
+        )
 
     displacements = neighbor_z - z[:, None, :]
 
@@ -98,9 +103,42 @@ def neighborhood_projection(
         eps=1e-8,
     )
 
-    probabilities = torch.softmax(cosine / (sigma**2), dim=-1)
-    return (probabilities[..., None] * displacements).sum(dim=1)
+    # Official Velvet uses:
+    # T = expm1(cosine * inverse_sigma)
+    #
+    # Our API exposes sigma, so:
+    # inverse_sigma = 1 / sigma^2
+    inverse_sigma = 1.0 / (sigma ** 2)
 
+    transition = torch.expm1(
+        cosine * inverse_sigma
+    )
+
+    # Official Velvet normalization.
+    transition = transition / (
+        torch.abs(transition).sum(
+            dim=1,
+            keepdim=True,
+        )
+        + 1e-12
+    )
+
+    # Official Velvet density correction.
+    subtractor = (
+        transition.mean(dim=1, keepdim=True)
+        * displacements.sum(dim=1)
+    )
+
+    projected_velocity = (
+        torch.einsum(
+            "ncg,nc->ng",
+            displacements,
+            transition,
+        )
+        - subtractor
+    )
+
+    return projected_velocity
 
 def neighborhood_constraint_loss(
     z: torch.Tensor,

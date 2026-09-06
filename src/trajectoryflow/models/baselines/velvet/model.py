@@ -194,7 +194,7 @@ class VelvetVAE(nn.Module):
         velocity = (
             torch.log1p(new.clamp_min(0.0))
             - torch.log1p(predicted_new)
-        ).pow(2).sum(dim=-1).mean()
+        ).pow(2).mean()
 
         zero = torch.zeros((), device=total.device, dtype=total.dtype)
         loss = reconstruction + kl + self.config.velocity_loss_weight * velocity
@@ -227,7 +227,7 @@ class VelvetVAE(nn.Module):
         velocity = (
             torch.log1p(new.clamp_min(0.0))
             - torch.log1p(predicted_new)
-        ).pow(2).sum(dim=-1).mean()
+        ).pow(2).mean()
 
         neighborhood = neighborhood_constraint_loss(
             z=z,
