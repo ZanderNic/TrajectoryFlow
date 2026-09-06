@@ -16,7 +16,7 @@ class LatentVectorField(nn.Module):
         self,
         n_latent: int,
         n_hidden: int = 128,
-        n_layers: int = 2,
+        n_layers: int = 3,
     ):
         super().__init__()
 
@@ -27,7 +27,7 @@ class LatentVectorField(nn.Module):
         n_in = n_latent
 
         for _ in range(n_layers):
-            layers.extend([nn.Linear(n_in, n_hidden), nn.SiLU()])
+            layers.extend([nn.Linear(n_in, n_hidden), nn.ReLU()])
             n_in = n_hidden
 
         layers.append(nn.Linear(n_in, n_latent))
@@ -151,18 +151,30 @@ def estimate_gamma_extreme_regression(
         x = total64[:, gene]
         y = new64[:, gene]
 
-        positive = x > ratio_eps
+        # Match scVelo's LinearRegression(percentile=[5, 95]):
+        # normalize total and new per cell, sum across modalities,
+        # then select observations in the extreme quantiles.
+        row_max = torch.stack([total64, new64], dim=0).amax(
+            dim=1, keepdim=True
+        ).clamp_min(1e-3)
 
-        if positive.sum() < 4:
+        normalized_data = (
+            torch.stack([total64, new64], dim=0) / row_max
+        ).sum(dim=0)
+
+        lower = torch.quantile(normalized_data[:, gene], 1.0 - quantile)
+        upper = torch.quantile(normalized_data[:, gene], quantile)
+
+        extreme = (
+            (normalized_data[:, gene] <= lower)
+            | (normalized_data[:, gene] >= upper)
+        )
+
+        x_extreme = total64[extreme, gene]
+        y_extreme = new64[extreme, gene]
+
+        if x_extreme.numel() == 0:
             continue
-
-        x_positive = x[positive]
-        y_positive = y[positive]
-        threshold = torch.quantile(x_positive, quantile)
-
-        extreme = x_positive >= threshold
-        x_extreme = x_positive[extreme]
-        y_extreme = y_positive[extreme]
 
         denominator = x_extreme.square().sum()
 
