@@ -1,0 +1,94 @@
+data_root = "data/processed/scifate2"
+output_dir = "runs/benchmark_velocity_example"
+seeds = [0, 1, 2]
+fail_fast = true
+save_checkpoints = false
+save_predictions = false
+
+[runtime]
+device = "auto"
+deterministic = true
+precision = "float32"
+allow_tf32 = false
+cudnn_benchmark = false
+
+[evaluation]
+n_source_cells = 1000
+n_target_cells = 1000
+n_samples = 10
+prediction_warmup_runs = 1
+prediction_timing_runs = 3
+
+[evaluation.space]
+transform = "library_log1p"
+library_size = 10000.0
+
+[evaluation.velocity]
+enabled = true
+reference_dir = "data/processed/scifate2/velocity_references"
+n_cells = 2000
+plots = true
+plot_max_cells = 4000
+plot_max_arrows = 300
+cell_id_column = "cell_id"
+color_by = "cell_type"
+
+[[models]]
+name = "velvet"
+
+[models.model_params]
+# Needed only for the SDE population-forecast path.
+# This is a benchmark choice, not a universal mapping from the Velvet paper.
+hours_per_sde_unit = 2.0
+
+[models.model_params.vae]
+n_latent = 50
+stage1_epochs = 200
+stage2_epochs = 800
+labelling_time = 2.0
+lr = 0.001
+weight_decay = 0.001
+n_neighbors = 100
+
+[models.model_params.sde]
+epochs = 250
+
+[[splits]]
+name = "early_to_late_with_local_direction"
+fit_timepoints = ["5h", "10h", "15h"]
+
+[splits.cell_split]
+train_fraction = 0.8
+validation_fraction = 0.0
+test_fraction = 0.2
+apply_to = "fit_timepoints"
+stratify_by = ["rep"]
+
+# Global held-out future-population evaluation.
+[[splits.test_tasks]]
+source = "15h"
+target = "20h"
+kind = "extrapolation"
+
+# Local direction evaluation on held-out 15 h cells.
+# These files must exist in evaluation.velocity.reference_dir:
+#   pts.npz
+#   crs.npz
+[[splits.test_velocity_tasks]]
+name = "pts_15h"
+reference = "pts"
+timepoints = ["15h"]
+partition = "test"
+
+[[splits.test_velocity_tasks]]
+name = "crs_15h"
+reference = "crs"
+timepoints = ["15h"]
+partition = "test"
+
+# Add this once cbd.npz has been prepared:
+# [[splits.test_velocity_tasks]]
+# name = "cbd_15h"
+# reference = "cbd"
+# timepoints = ["15h"]
+# partition = "test"

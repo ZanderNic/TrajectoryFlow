@@ -33,9 +33,11 @@ class VelvetTrainer(BaseTrainer):
         data: VelvetData,
         neighbor_indices: np.ndarray | None = None,
         device: torch.device | str | None = None,
+        train_sde: bool = True,
     ):
         self.data = data
         self.neighbor_indices = neighbor_indices
+        self.train_sde = bool(train_sde)
 
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -341,9 +343,10 @@ class VelvetTrainer(BaseTrainer):
             neighbor_indices=self.neighbor_indices,
         )
 
-        self._train_sde(
-            baseline=model,
-            all_z_cpu=all_z_cpu,
-        )
+        if self.train_sde:
+            self._train_sde(
+                baseline=model,
+                all_z_cpu=all_z_cpu,
+            )
 
         model._is_fitted = True

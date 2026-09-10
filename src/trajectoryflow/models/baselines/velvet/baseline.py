@@ -46,6 +46,26 @@ class VelvetBaseline(BaseTrajectoryModel):
             config=sde_config,
         )
 
+    @torch.no_grad()
+    def predict_velocity(
+        self,
+        source: torch.Tensor,
+        sample_latent: bool = False,
+    ) -> torch.Tensor:
+        """
+        Return the local VelvetVAE gene-expression velocity.
+
+        This is the quantity used for local direction benchmarks. It is
+        intentionally separate from VelvetSDE rollout prediction.
+        """
+        if not self.is_fitted:
+            raise RuntimeError("VelvetBaseline must be fitted before velocity inference.")
+
+        return self.velvet.infer_gene_velocity(
+            total=source,
+            sample_latent=sample_latent,
+        )
+
     def predict(
         self,
         source: torch.Tensor,

@@ -137,6 +137,45 @@ class VelvetVAE(nn.Module):
         velocity = expression_next - expression
         return expression, latent_velocity, velocity
 
+    @torch.no_grad()
+    def infer_gene_velocity(
+        self,
+        total: torch.Tensor,
+        sample_latent: bool = False,
+    ) -> torch.Tensor:
+        """
+        Infer Velvet's local gene-expression velocity for observed cells.
+
+        The returned tensor has shape [n_cells, n_genes]. For deterministic
+        benchmarking the posterior mean is used by default. Directional
+        metrics such as PTS/CRS/CBD are invariant to an overall time scale.
+        """
+        if total.ndim != 2:
+            raise ValueError("total must have shape [n_cells, n_genes].")
+        if total.shape[1] != self.n_genes:
+            raise ValueError(
+                f"Expected {self.n_genes} genes, got {total.shape[1]}."
+            )
+        if not torch.isfinite(total).all():
+            raise ValueError("total contains non-finite values.")
+        if (total < 0).any():
+            raise ValueError("Velvet velocity inference requires non-negative total RNA.")
+
+        was_training = self.training
+        self.eval()
+
+        try:
+            _, _, z = self.encode(total=total, sample=sample_latent)
+            log_library = observed_log_library(total, eps=self.config.eps)
+            _, _, velocity = self.gene_velocity(
+                z=z,
+                log_library=log_library,
+            )
+        finally:
+            self.train(was_training)
+
+        return velocity
+
     def predicted_new(
         self,
         z: torch.Tensor,
