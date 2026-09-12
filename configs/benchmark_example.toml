@@ -1,5 +1,5 @@
 data_root = "data/processed/scifate2"
-output_dir = "runs/velvet_paper_direction_example"
+output_dir = "runs/benchmark_example"
 seeds = [0]
 fail_fast = true
 save_checkpoints = false
@@ -9,27 +9,41 @@ save_predictions = false
 device = "auto"
 deterministic = true
 precision = "float32"
+store_cache_size = 0
 allow_tf32 = false
 cudnn_benchmark = false
 
 [evaluation]
-n_source_cells = 1000
-n_target_cells = 1000
-n_samples = 1
+n_source_cells = 500
+n_target_cells = 500
+n_samples = 5
+sample_batch_size = 1
 prediction_warmup_runs = 0
 prediction_timing_runs = 1
+
+[evaluation.space]
+transform = "library_log1p"
+library_size = 10000.0
 
 [evaluation.velocity]
 enabled = true
 reference_dir = "data/processed/scifate2/velocity_references"
+n_cells = 1000
+batch_size = 64
 plots = true
-plot_max_cells = 10000
-plot_max_arrows = 500
+plot_max_cells = 2000
+plot_max_arrows = 200
 cell_id_column = "cell_id"
 color_by = "cell_type"
 
 [[models]]
+name = "no_change"
+
+[[models]]
 name = "velvet"
+
+[models.model_params]
+hours_per_sde_unit = 2.0
 
 [models.model_params.vae]
 n_latent = 50
@@ -39,27 +53,35 @@ labelling_time = 2.0
 lr = 0.001
 weight_decay = 0.001
 n_neighbors = 100
+microbatch_size = 128
+latent_batch_size = 512
 
-[models.trainer_params]
-train_sde = false
+[models.model_params.sde]
+epochs = 250
 
 [[splits]]
-name = "paper_direction_all_cells"
-fit_timepoints = ["5h", "10h", "15h", "20h", "72h", "96h", "120h", "144h", "168h", "192h"]
+name = "split1"
+fit_timepoints = ["5h", "10h", "20h", "72h"]
 
-[splits.cell_split]
-train_fraction = 1.0
-validation_fraction = 0.0
-test_fraction = 0.0
+[[splits.test_tasks]]
+source = "10h"
+target = "15h"
+kind = "extrapolation"
 
 [[splits.test_velocity_tasks]]
-name = "pts"
+name = "pts_15h"
 reference = "pts"
-timepoints = ["5h", "10h", "15h", "20h", "72h", "96h", "120h", "144h", "168h", "192h"]
+timepoints = ["15h"]
 partition = "all"
 
 [[splits.test_velocity_tasks]]
-name = "crs"
+name = "crs_15h"
 reference = "crs"
-timepoints = ["5h", "10h", "15h", "20h", "72h", "96h", "120h", "144h", "168h", "192h"]
+timepoints = ["15h"]
+partition = "all"
+
+[[splits.test_velocity_tasks]]
+name = "cbd_15h"
+reference = "cbd"
+timepoints = ["15h"]
 partition = "all"
