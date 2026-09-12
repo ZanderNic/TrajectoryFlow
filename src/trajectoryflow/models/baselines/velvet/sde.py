@@ -50,14 +50,16 @@ class VelvetSDE(nn.Module):
         Returns:
             [n_steps, n_simulations, n_cells, n_latent]
         """
-        if z0.ndim != 2:
-            raise ValueError("z0 must have shape [n_cells, n_latent].")
-        if n_steps < 2:
-            raise ValueError("n_steps must be >= 2.")
-        if t_max <= 0:
-            raise ValueError("t_max must be > 0.")
+        if z0.ndim != 2 or 0 in z0.shape:
+            raise ValueError("z0 must have non-empty shape [n_cells, n_latent].")
+        if not torch.isfinite(z0).all():
+            raise ValueError("z0 contains non-finite values.")
+        if n_simulations < 1 or n_steps < 2 or not torch.isfinite(torch.tensor(float(t_max))) or t_max <= 0:
+            raise ValueError("n_simulations must be >= 1, n_steps >= 2 and t_max finite and > 0.")
 
         noise = self.config.noise_scalar if noise_scalar is None else noise_scalar
+        if noise < 0:
+            raise ValueError("noise_scalar must be >= 0.")
         dt = t_max / (n_steps - 1)
         sqrt_dt = dt**0.5
 

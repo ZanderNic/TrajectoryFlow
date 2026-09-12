@@ -7,21 +7,17 @@ from torch.utils.data import Dataset
 
 
 class CellIndexDataset(Dataset):
-    """
-        Dataset containing cell indices for one loaded timepoint.
-
-        Actual expression data are accessed by the collator so that
-        sparse matrices can be sliced batch-wise before densification.
-    """
+    """Lightweight index dataset; sparse matrix access stays in the collator."""
 
     def __init__(self, n_cells: int):
-        if n_cells < 0:
-            raise ValueError("n_cells must be >= 0.")
-
+        if isinstance(n_cells, bool) or not isinstance(n_cells, int) or n_cells < 0:
+            raise ValueError("n_cells must be a non-negative integer.")
         self.n_cells = n_cells
 
     def __len__(self) -> int:
         return self.n_cells
 
     def __getitem__(self, index: int) -> int:
+        if not 0 <= index < self.n_cells:
+            raise IndexError(index)
         return index

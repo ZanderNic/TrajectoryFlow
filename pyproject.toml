@@ -34,11 +34,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-    "ruff",
-    "mypy",
-]
+data = ["anndata", "h5py", "requests", "tqdm"]
+reference = ["anndata", "scanpy", "cellrank", "scFates"]
+annotations = ["anndata", "scanpy", "scrublet", "scikit-misc", "igraph", "leidenalg"]
+dev = ["pytest", "ruff", "mypy", "anndata"]
 
 [project.urls]
 Repository = "https://github.com/ZanderNic/trajectoryflow"

@@ -10,32 +10,46 @@ import torch.nn.functional as F
 
 
 class LatentVectorField(nn.Module):
-    """Smooth neural vector field z -> dz/dt."""
+    """
+    Latent vector field matching the official Velvet implementation.
+
+    `n_layers` is the number of hidden Linear layers.
+    The output layer is additional and has no activation.
+    """
 
     def __init__(
         self,
         n_latent: int,
         n_hidden: int = 128,
-        n_layers: int = 2,
+        n_layers: int = 3,
     ):
         super().__init__()
 
         if n_layers < 1:
             raise ValueError("n_layers must be >= 1.")
 
-        layers = []
-        n_in = n_latent
+        layers = [
+            nn.Linear(n_latent, n_hidden),
+            nn.ReLU(),
+        ]
 
-        for _ in range(n_layers):
-            layers.extend([nn.Linear(n_in, n_hidden), nn.SiLU()])
-            n_in = n_hidden
+        for _ in range(n_layers - 1):
+            layers.extend(
+                [
+                    nn.Linear(n_hidden, n_hidden),
+                    nn.ReLU(),
+                ]
+            )
 
-        layers.append(nn.Linear(n_in, n_latent))
-        self.network = nn.Sequential(*layers)
+        layers.append(
+            nn.Linear(n_hidden, n_latent)
+        )
+
+        self.drift = nn.Sequential(*layers)
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        return self.network(z)
-
+        return self.drift(z)
+    
 
 class MetabolicLabelingModel(nn.Module):
     """

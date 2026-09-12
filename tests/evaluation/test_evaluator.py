@@ -129,3 +129,11 @@ def test_evaluator_rejects_feature_mismatch():
             prediction,
             target,
         )
+
+def test_evaluate_uses_sample_std_across_stochastic_predictions():
+    evaluator = Evaluator()
+    evaluator.register("dummy", lambda predicted, target: float(predicted.mean()), False, MetricRange(-10, 10))
+    prediction = TrajectoryPrediction(states=torch.tensor([[[1.0]], [[3.0]]]), source_time=0, target_time=1)
+    result = evaluator.evaluate(prediction, torch.tensor([[0.0]])).metrics["dummy"]
+    assert result.mean == pytest.approx(2.0)
+    assert result.std == pytest.approx(2**0.5)

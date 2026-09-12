@@ -1,3 +1,8 @@
+# std-lib imports
+
+# 3 party imports
+
+# package imports
 from trajectoryflow.experiment.config import (
     BenchmarkConfig,
     EvaluationConfig,

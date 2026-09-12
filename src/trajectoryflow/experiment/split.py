@@ -1,6 +1,7 @@
 # std-lib imports
 import hashlib
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 # 3 party imports
@@ -59,6 +60,13 @@ class ForecastTask:
     def __post_init__(self) -> None:
         if self.source_hours == self.target_hours:
             raise ValueError("Source and target timepoints must differ.")
+        if self.kind not in ("auto", "observed_transition", "interpolation", "extrapolation", "backcast"):
+            raise ValueError(f"Unknown task kind {self.kind!r}.")
+        valid_partitions = ("auto", "all", "train", "validation", "test")
+        if self.source_partition not in valid_partitions or self.target_partition not in valid_partitions:
+            raise ValueError("Unknown source/target cell partition.")
+        if self.name is not None and not self.name.strip():
+            raise ValueError("Task name must not be empty.")
 
     @property
     def task_name(self) -> str:
@@ -143,12 +151,9 @@ class CellSplitSpec:
     group_by: str | None = None
 
     def __post_init__(self) -> None:
-        fractions = (
-            self.train_fraction,
-            self.validation_fraction,
-            self.test_fraction,
-        )
-
+        fractions = (self.train_fraction, self.validation_fraction, self.test_fraction)
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) for value in fractions):
+            raise ValueError("Cell split fractions must be finite numbers.")
         if any(value < 0 or value > 1 for value in fractions):
             raise ValueError("Cell split fractions must lie in [0, 1].")
 
@@ -160,8 +165,14 @@ class CellSplitSpec:
         if self.apply_to not in ("fit_timepoints", "all"):
             raise ValueError(f"Unsupported apply_to={self.apply_to!r}.")
 
-        if self.group_by is not None and self.group_by in self.stratify_by:
-            raise ValueError("group_by must not also appear in stratify_by.")
+        if len(set(self.stratify_by)) != len(self.stratify_by):
+            raise ValueError("stratify_by columns must be unique.")
+        if any(not column.strip() for column in self.stratify_by):
+            raise ValueError("stratify_by columns must not be empty.")
+        if self.group_by is not None and not self.group_by.strip():
+            raise ValueError("group_by must not be empty.")
+        if self.group_by is not None and self.stratify_by:
+            raise ValueError("group_by and stratify_by cannot be combined; group holdout does not use cell-level stratification.")
 
 
 @dataclass(frozen=True)
@@ -177,6 +188,10 @@ class SplitSpec:
     allow_validation_test_overlap: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("Split name must not be empty.")
+        if not isinstance(self.allow_validation_test_overlap, bool):
+            raise ValueError("allow_validation_test_overlap must be boolean.")
         if self.fit_timepoints is not None and self.exclude_timepoints:
             raise ValueError(
                 "Specify either fit_timepoints or exclude_timepoints, not both."
@@ -193,6 +208,16 @@ class SplitSpec:
             raise ValueError(
                 "A split needs at least one forecast or velocity validation/test task."
             )
+        if self.fit_timepoints is not None and len(set(self.fit_timepoints)) != len(self.fit_timepoints):
+            raise ValueError("fit_timepoints must be unique.")
+        if len(set(self.exclude_timepoints)) != len(self.exclude_timepoints):
+            raise ValueError("exclude_timepoints must be unique.")
+        for timepoint in (*(() if self.fit_timepoints is None else self.fit_timepoints), *self.exclude_timepoints):
+            timepoint_hours(timepoint)
+        tasks = (*self.validation_tasks, *self.test_tasks, *self.validation_velocity_tasks, *self.test_velocity_tasks)
+        names = [task.task_name for task in tasks]
+        if len(set(names)) != len(names):
+            raise ValueError("Task names within a split must be unique.")
 
 
 @dataclass(frozen=True)
@@ -246,7 +271,7 @@ class ResolvedSplit:
     @property
     def fingerprint(self) -> str:
         digest = hashlib.sha256()
-        digest.update(self.name.encode("utf-8"))
+        digest.update(json.dumps(asdict(self.spec), sort_keys=True, separators=(",", ":")).encode("utf-8"))
         digest.update(str(self.seed).encode("utf-8"))
 
         for timepoint in sorted(self.partitions):
@@ -549,6 +574,10 @@ def resolve_split(store, spec: SplitSpec, seed: int) -> ResolvedSplit:
                 test_indices=np.empty(0, dtype=np.int64),
                 split_applied=False,
             )
+
+    empty_training = [timepoint for timepoint in fit_timepoints if len(partitions[timepoint].train_indices) == 0]
+    if empty_training:
+        raise ValueError(f"Training partition is empty for fit timepoints: {empty_training}.")
 
     resolved = ResolvedSplit(
         spec=spec,

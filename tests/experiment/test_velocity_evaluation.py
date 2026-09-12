@@ -1,10 +1,8 @@
 # std-lib imports
-from pathlib import Path
 
 # 3 party imports
 import numpy as np
-import pandas as pd
-import torch
+import pytest
 
 # package imports
 from trajectoryflow.experiment.evaluation import (
@@ -208,3 +206,17 @@ def test_reference_matching_keeps_duplicate_cbd_rows():
 
     np.testing.assert_array_equal(query, [0, 0, 1])
     np.testing.assert_array_equal(reference_indices, [0, 1, 2])
+
+
+def test_reference_rejects_empty_pca_or_gene_names():
+    with pytest.raises(ValueError, match="non-zero shape"):
+        VelocityReference(name="bad", cell_ids=np.array(["a"]), vectors=np.empty((1, 0)), pca_components=np.empty((0, 2)), pca_mean=np.zeros(2))
+
+    with pytest.raises(ValueError, match="non-empty strings"):
+        VelocityReference(name="bad", cell_ids=np.array(["a"]), vectors=np.ones((1, 1)), pca_components=np.ones((1, 2)), pca_mean=np.zeros(2), genes=np.array(["g1", ""]))
+
+
+def test_velocity_alignment_rejects_nonpositive_epsilon():
+    values = np.ones((1, 2))
+    with pytest.raises(ValueError, match="eps must be > 0"):
+        velocity_alignment_metrics(values, values, np.array(["a"]), eps=0.0)

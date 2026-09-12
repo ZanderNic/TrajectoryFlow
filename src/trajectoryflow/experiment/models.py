@@ -1,6 +1,6 @@
 # std-lib imports
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 # 3 party imports
@@ -143,6 +143,8 @@ class NoChangeExperimentAdapter(ExperimentModelAdapter):
     ) -> BuiltExperimentModel:
         from trajectoryflow.models.baselines.no_change import NoChangeBaseline
 
+        if config.trainer_params:
+            raise ValueError("no_change does not use trainer_params.")
         model = NoChangeBaseline(**config.model_params)
 
         return BuiltExperimentModel(
@@ -168,32 +170,14 @@ def build_velvet_training_data(data: ExperimentData):
     from trajectoryflow.models.baselines.velvet.data import VelvetData
 
     snapshots = data.training_snapshots()
-
-    total = sparse.vstack(
-        [snapshot.expression for snapshot in snapshots],
-        format="csr",
-    )
-    new = sparse.vstack(
-        [snapshot.new for snapshot in snapshots],
-        format="csr",
-    )
-
+    total = sparse.vstack([snapshot.expression for snapshot in snapshots], format="csr")
+    new = sparse.vstack([snapshot.new for snapshot in snapshots], format="csr")
     obs_parts = []
-
     for snapshot in snapshots:
         obs = snapshot.obs.copy()
-        obs["timepoint"] = snapshot.timepoint
-        obs["time_hours"] = snapshot.time_hours
+        obs["timepoint"], obs["time_hours"] = snapshot.timepoint, snapshot.time_hours
         obs_parts.append(obs)
-
-    obs = pd.concat(obs_parts, ignore_index=True)
-
-    return VelvetData(
-        total=total,
-        new=new,
-        obs=obs,
-        timepoints=data.training_timepoints,
-    )
+    return VelvetData(total=total, new=new, obs=pd.concat(obs_parts, ignore_index=True), timepoints=data.training_timepoints)
 
 
 class VelvetExperimentAdapter(ExperimentModelAdapter):
@@ -249,11 +233,9 @@ class VelvetExperimentAdapter(ExperimentModelAdapter):
         config: TrainingConfig,
     ) -> dict[str, Any]:
         if config.budget.limited:
-            raise NotImplementedError(
-                "VelvetTrainer must be made budget-aware before using the generic "
-                "max_seconds/max_epochs/max_steps benchmark budget. Do not silently "
-                "claim a fixed-compute comparison while calling its current fit()."
-            )
+            raise NotImplementedError("VelvetTrainer is not budget-aware yet; fixed-compute budgets cannot be reported safely.")
+        if config.early_stopping is not None:
+            raise NotImplementedError("VelvetTrainer does not implement the generic early-stopping configuration yet.")
 
         built.trainer.fit(built.model)
 
@@ -262,4 +244,13 @@ class VelvetExperimentAdapter(ExperimentModelAdapter):
             "stage2_epochs": len(built.trainer.history.stage2),
             "sde_epochs": len(built.trainer.history.sde),
             "stop_reason": "configured_training_complete",
+        }
+
+    def checkpoint_state(self, built: BuiltExperimentModel):
+        model = built.model
+        return {
+            "velvet": model.velvet.state_dict(),
+            "vae_config": asdict(model.velvet.config),
+            "sde_config": asdict(model.sde.config),
+            "hours_per_sde_unit": model.hours_per_sde_unit,
         }

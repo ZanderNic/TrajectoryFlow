@@ -61,6 +61,9 @@ class _MemorySampler:
         self.peak_bytes: int | None = None
 
     def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("Memory sampler is already running.")
+        self._stop.clear()
         self.peak_bytes = _current_rss_bytes()
 
         def sample() -> None:
@@ -81,6 +84,7 @@ class _MemorySampler:
 
         if self._thread is not None:
             self._thread.join()
+            self._thread = None
 
 
 @dataclass(frozen=True)
@@ -101,16 +105,13 @@ class PhaseStats:
 
 class PhaseProfiler(AbstractContextManager):
 
-    def __init__(self, device: torch.device | str | None = None):
+    def __init__(self, device: torch.device | str | None = None, profile_cuda_memory: bool = True):
         self.device = torch.device(device) if device is not None else None
+        self.profile_cuda_memory = profile_cuda_memory
         self.stats: PhaseStats | None = None
 
     def _cuda_enabled(self) -> bool:
-        return (
-            self.device is not None
-            and self.device.type == "cuda"
-            and torch.cuda.is_available()
-        )
+        return self.profile_cuda_memory and self.device is not None and self.device.type == "cuda" and torch.cuda.is_available()
 
     def __enter__(self):
         if self._cuda_enabled():

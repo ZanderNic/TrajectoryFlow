@@ -1,6 +1,7 @@
 # std-lib imports
 
 # 3 party imports
+import pytest
 import torch
 
 # package imports
@@ -53,3 +54,12 @@ def test_infer_gene_velocity_is_deterministic_by_default():
 
     torch.testing.assert_close(first, second)
     assert model.training
+
+
+def test_velvet_rollout_rejects_backcast_explicitly():
+    from trajectoryflow.models.baselines.velvet import VelvetBaseline, VelvetVAEConfig
+
+    model = VelvetBaseline(n_genes=3, hours_per_sde_unit=1.0, vae_config=VelvetVAEConfig(n_hidden=4, n_latent=2, vector_hidden=4, n_neighbors=1))
+    model._is_fitted = True
+    with pytest.raises(NotImplementedError, match="backcast"):
+        model.predict(torch.ones((2, 3)), source_time=10.0, target_time=5.0)

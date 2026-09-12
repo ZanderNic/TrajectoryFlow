@@ -5,50 +5,27 @@ import argparse
 import hashlib
 import json
 import shutil
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 # 3 party imports
-import numpy as np
 import pandas as pd
 
 # package imports
 from trajectoryflow.data.store import ScifateStore
-from trajectoryflow.experiment.models import (
-    ExperimentRegistry,
-    NoChangeExperimentAdapter,
-    VelvetExperimentAdapter,
-)
+from trajectoryflow.evaluation.default import make_default_evaluator
 from trajectoryflow.experiment.config import BenchmarkConfig, load_benchmark_config
 from trajectoryflow.experiment.evaluation import CallableEvaluationAdapter
+from trajectoryflow.experiment.models import ExperimentRegistry, NoChangeExperimentAdapter, VelvetExperimentAdapter
 from trajectoryflow.experiment.runner import ExperimentRunner
 from trajectoryflow.experiment.runtime import system_info
 from trajectoryflow.experiment.split import resolve_split
-from trajectoryflow.evaluation.metrics.population import (
-    centroid_distance,
-    chamfer_distance,
-    dispersion_error,
-    mean_absolute_error,
-    mean_correlation,
-    mmd_rbf,
-    sliced_wasserstein,
-    variance_absolute_error,
-    variance_correlation,
-)
+from trajectoryflow.models.base import TrajectoryPrediction
 
 
-METRICS = {
-    "sliced_wasserstein": (sliced_wasserstein, False),
-    "mmd": (mmd_rbf, False),
-    "chamfer": (chamfer_distance, False),
-    "centroid_distance": (centroid_distance, False),
-    "mean_mae": (mean_absolute_error, False),
-    "variance_mae": (variance_absolute_error, False),
-    "mean_correlation": (mean_correlation, True),
-    "variance_correlation": (variance_correlation, True),
-    "dispersion_error": (dispersion_error, False),
-}
+_DEFAULT_EVALUATOR = make_default_evaluator()
+METRICS = tuple(_DEFAULT_EVALUATOR.available_metrics())
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip completed experiments whose split fingerprint still matches.",
+        help="Skip completed experiments only when split, config, data, references, and code still match.",
     )
     parser.add_argument(
         "--overwrite",
@@ -83,40 +60,10 @@ def sha256_file(path: Path) -> str | None:
 
 
 def evaluate_prediction(prediction, target) -> pd.DataFrame:
-    states = prediction.states
-
-    if states.ndim != 3:
-        raise ValueError(
-            "prediction.states must have shape [n_samples, n_cells, n_features]."
-        )
-
-    rows = []
-
-    for name, (metric, higher_is_better) in METRICS.items():
-        values = np.asarray(
-            [metric(sample, target) for sample in states],
-            dtype=np.float64,
-        )
-
-        finite = values[np.isfinite(values)]
-
-        if len(finite) == 0:
-            mean = float("nan")
-            std = float("nan")
-        else:
-            mean = float(finite.mean())
-            std = float(finite.std(ddof=1)) if len(finite) > 1 else 0.0
-
-        rows.append(
-            {
-                "metric": name,
-                "value": mean,
-                "std": std,
-                "higher_is_better": higher_is_better,
-            }
-        )
-
-    return pd.DataFrame(rows)
+    if not isinstance(prediction, TrajectoryPrediction):
+        prediction = TrajectoryPrediction(states=prediction.states, source_time=float(getattr(prediction, "source_time", 0.0)), target_time=float(getattr(prediction, "target_time", 1.0)), metadata=dict(getattr(prediction, "metadata", {})))
+    frame = _DEFAULT_EVALUATOR.evaluate(prediction, target).to_frame()
+    return frame.rename(columns={"mean": "value"})
 
 
 def make_registry(config: BenchmarkConfig) -> ExperimentRegistry:
@@ -146,21 +93,69 @@ def experiment_dir(config: BenchmarkConfig, model: str, split: str, seed: int) -
     return config.output_dir / model / split / f"seed_{seed}"
 
 
-def completed_result_matches(path: Path, split_fingerprint: str) -> bool:
-    result_path = path / "result.json"
-
-    if not result_path.exists():
-        return False
-
+def completed_result_matches(path: Path, split_fingerprint: str, resume_signature: str) -> bool:
     try:
-        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result = json.loads((path / "result.json").read_text(encoding="utf-8"))
+        resume = json.loads((path / "resume.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    return result.get("status") == "completed" and result.get("split_fingerprint") == split_fingerprint and resume.get("signature") == resume_signature
 
-    return (
-        result.get("status") == "completed"
-        and result.get("split_fingerprint") == split_fingerprint
-    )
+
+def _json_hash(value) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def source_tree_sha256(root: Path) -> str | None:
+    if not root.exists():
+        return None
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def dataset_file_state(store: ScifateStore) -> list[dict]:
+    manifest = store.manifest
+    relative_paths = {manifest["genes"], manifest["preprocessing"]}
+    for snapshot in manifest["snapshots"]:
+        relative_paths.update(snapshot[key] for key in ("expression", "new", "ntr", "obs"))
+    states = []
+    for relative in sorted(relative_paths):
+        path = store.root / relative
+        stat = path.stat()
+        states.append({"path": str(relative), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+    return states
+
+
+def resume_signature(config: BenchmarkConfig, model, split, store: ScifateStore) -> str:
+    root = Path(__file__).resolve().parents[1]
+    payload = {
+        "schema": 1,
+        "model": asdict(model),
+        "training": asdict(config.training),
+        "evaluation": asdict(config.evaluation),
+        "runtime": asdict(config.runtime),
+        "save_checkpoints": config.save_checkpoints,
+        "save_predictions": config.save_predictions,
+        "split_fingerprint": split.fingerprint,
+        "dataset": dataset_manifest(store, config),
+        "dataset_files": dataset_file_state(store),
+        "velocity_references": velocity_reference_manifest(config),
+        "code": {
+            "trajectoryflow": source_tree_sha256(root / "src" / "trajectoryflow"),
+            "run_benchmark": sha256_file(Path(__file__)),
+        },
+    }
+    return _json_hash(payload)
+
+
+def save_resume_signature(path: Path, signature: str) -> None:
+    (path / "resume.json").write_text(json.dumps({"signature": signature}, indent=2), encoding="utf-8")
 
 
 def dataset_manifest(store: ScifateStore, config: BenchmarkConfig) -> dict:
@@ -358,7 +353,8 @@ def main() -> None:
                 run_dir = experiment_dir(config, model.name, split.name, seed)
                 label = f"{model.name} | {split.name} | seed={seed}"
 
-                if args.resume and completed_result_matches(run_dir, split.fingerprint):
+                signature = resume_signature(config, model, split, store)
+                if args.resume and completed_result_matches(run_dir, split.fingerprint, signature):
                     print(f"[skip] {label}")
                     skipped += 1
                     continue
@@ -382,6 +378,7 @@ def main() -> None:
                     continue
 
                 if result.status == "completed":
+                    save_resume_signature(run_dir, signature)
                     completed += 1
                     print(f"[done] {label}")
                 else:

@@ -6,6 +6,7 @@ import pandas as pd
 
 # package imports
 
+
 @dataclass(frozen=True)
 class MetricRange:
     lower: float | None
@@ -14,12 +15,8 @@ class MetricRange:
     upper_inclusive: bool = True
 
     def __str__(self) -> str:
-        left = "[" if self.lower_inclusive else "("
-        right = "]" if self.upper_inclusive else ")"
-
-        lower = "-∞" if self.lower is None else f"{self.lower:g}"
-        upper = "∞" if self.upper is None else f"{self.upper:g}"
-
+        left, right = ("[" if self.lower_inclusive else "("), ("]" if self.upper_inclusive else ")")
+        lower, upper = ("-∞" if self.lower is None else f"{self.lower:g}"), ("∞" if self.upper is None else f"{self.upper:g}")
         return f"{left}{lower}, {upper}{right}"
 
 
@@ -41,17 +38,4 @@ class EvaluationReport:
     metrics: dict[str, MetricResult]
 
     def to_frame(self) -> pd.DataFrame:
-        rows = []
-
-        for result in self.metrics.values():
-            rows.append(
-                {
-                    "metric": result.name,
-                    "mean": result.mean,
-                    "std": result.std,
-                    "range": str(result.value_range),
-                    "higher_is_better": result.higher_is_better,
-                }
-            )
-
-        return pd.DataFrame(rows)
+        return pd.DataFrame([{"metric": result.name, "mean": result.mean, "std": result.std, "value_range": str(result.value_range), "higher_is_better": result.higher_is_better} for result in self.metrics.values()])

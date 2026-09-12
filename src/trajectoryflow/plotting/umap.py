@@ -10,6 +10,8 @@ import numpy as np
 def _validate_coordinates(coordinates: np.ndarray) -> None:
     if coordinates.ndim != 2 or coordinates.shape[1] != 2:
         raise ValueError("coordinates must have shape [n_cells, 2].")
+    if not np.isfinite(coordinates).all():
+        raise ValueError("coordinates contain non-finite values.")
 
 
 def plot_umap(
@@ -26,6 +28,9 @@ def plot_umap(
     if labels is None:
         ax.scatter(coordinates[:, 0], coordinates[:, 1], s=size, alpha=alpha)
     else:
+        labels = np.asarray(labels)
+        if labels.ndim != 1 or len(labels) != len(coordinates):
+            raise ValueError("labels must have one value per coordinate row.")
         unique_labels = np.unique(labels)
 
         for label in unique_labels:
@@ -95,39 +100,3 @@ def plot_prediction_comparison(
     axes[2].set_xlabel("UMAP 1")
 
     return fig, axes
-
-
-def plot_joint_prediction_overlay(
-    target_coordinates: np.ndarray,
-    prediction_coordinates: np.ndarray,
-    alpha: float = 0.7,
-    size: float = 8,
-    title: str = "Prediction vs Target",
-):
-    _validate_coordinates(target_coordinates)
-    _validate_coordinates(prediction_coordinates)
-
-    fig, ax = plt.subplots(figsize=(7, 6))
-
-    ax.scatter(
-        target_coordinates[:, 0],
-        target_coordinates[:, 1],
-        s=size,
-        alpha=alpha,
-        label="target",
-    )
-
-    ax.scatter(
-        prediction_coordinates[:, 0],
-        prediction_coordinates[:, 1],
-        s=size,
-        alpha=alpha,
-        label="prediction",
-    )
-
-    ax.set_xlabel("UMAP 1")
-    ax.set_ylabel("UMAP 2")
-    ax.set_title(title)
-    ax.legend(frameon=False, markerscale=2)
-
-    return fig, ax

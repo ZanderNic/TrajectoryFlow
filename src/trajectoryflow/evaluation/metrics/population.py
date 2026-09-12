@@ -182,6 +182,8 @@ def mmd_rbf(
     """Squared Maximum Mean Discrepancy using an RBF kernel."""
 
     _validate(predicted, target)
+    if max_samples < 1:
+        raise ValueError("max_samples must be >= 1.")
 
     generator = torch.Generator()
     generator.manual_seed(seed)
@@ -227,6 +229,10 @@ def sliced_wasserstein(
     """
 
     _validate(predicted, target)
+    if n_projections < 1:
+        raise ValueError("n_projections must be >= 1.")
+    if max_samples < 1:
+        raise ValueError("max_samples must be >= 1.")
 
     generator = torch.Generator()
     generator.manual_seed(seed)
@@ -282,6 +288,8 @@ def chamfer_distance(
     """
 
     _validate(predicted, target)
+    if max_samples < 1:
+        raise ValueError("max_samples must be >= 1.")
 
     generator = torch.Generator()
     generator.manual_seed(seed)

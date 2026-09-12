@@ -218,10 +218,15 @@ class VelvetVAE(nn.Module):
             eps=self.config.eps,
         ).sum(dim=-1).mean()
 
-        kl = standard_normal_kl(
-            mean=mean,
-            log_variance=log_variance,
-        ).sum(dim=-1).mean()
+        kl = (
+            standard_normal_kl(
+                mean=mean,
+                log_variance=log_variance,
+            )
+            .sum(dim=-1)
+            .mean()
+            * self.config.kl_loss_weight
+        )
 
         predicted_new, _, _, _ = self.predicted_new(
             z=z,
@@ -230,10 +235,10 @@ class VelvetVAE(nn.Module):
 
         # Paper Eq. 11 uses ||log(n) - log(n_hat)||^2. log1p is the
         # zero-safe count-data version of the same objective.
-        velocity = (
-            torch.log1p(new.clamp_min(0.0))
-            - torch.log1p(predicted_new)
-        ).pow(2).sum(dim=-1).mean()
+        velocity = torch.nn.functional.mse_loss(
+            torch.log1p(new.clamp_min(0.0)),
+            torch.log1p(predicted_new),
+        )
 
         zero = torch.zeros((), device=total.device, dtype=total.dtype)
         loss = reconstruction + kl + self.config.velocity_loss_weight * velocity
@@ -263,10 +268,10 @@ class VelvetVAE(nn.Module):
             log_library=log_library,
         )
 
-        velocity = (
-            torch.log1p(new.clamp_min(0.0))
-            - torch.log1p(predicted_new)
-        ).pow(2).sum(dim=-1).mean()
+        velocity = torch.nn.functional.mse_loss(
+            torch.log1p(new.clamp_min(0.0)),
+            torch.log1p(predicted_new),
+        )
 
         neighborhood = neighborhood_constraint_loss(
             z=z,

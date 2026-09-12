@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 # 3 party imports
-import numpy as np
 import pandas as pd
 import pytest
 import torch
@@ -37,36 +36,30 @@ def load_run_benchmark():
     return module
 
 
-def test_completed_result_matches_requires_status_and_fingerprint(
-    tmp_path,
-):
+def test_completed_result_matches_requires_status_fingerprint_and_signature(tmp_path):
     benchmark = load_run_benchmark()
     run = tmp_path / "run"
     run.mkdir()
+    assert not benchmark.completed_result_matches(run, "abc", "sig")
 
-    assert not benchmark.completed_result_matches(
-        run,
-        "abc",
-    )
+    (run / "result.json").write_text(json.dumps({"status": "completed", "split_fingerprint": "abc"}), encoding="utf-8")
+    assert not benchmark.completed_result_matches(run, "abc", "sig")
 
-    (run / "result.json").write_text(
-        json.dumps(
-            {
-                "status": "completed",
-                "split_fingerprint": "abc",
-            }
-        ),
-        encoding="utf-8",
-    )
+    benchmark.save_resume_signature(run, "sig")
+    assert benchmark.completed_result_matches(run, "abc", "sig")
+    assert not benchmark.completed_result_matches(run, "different", "sig")
+    assert not benchmark.completed_result_matches(run, "abc", "different")
 
-    assert benchmark.completed_result_matches(
-        run,
-        "abc",
-    )
-    assert not benchmark.completed_result_matches(
-        run,
-        "different",
-    )
+
+def test_source_tree_hash_changes_with_source(tmp_path):
+    benchmark = load_run_benchmark()
+    package = tmp_path / "package"
+    package.mkdir()
+    source = package / "module.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    first = benchmark.source_tree_sha256(package)
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    assert benchmark.source_tree_sha256(package) != first
 
 
 def test_evaluate_prediction_returns_all_benchmark_metrics():

@@ -31,10 +31,6 @@ color_by = "cell_type"
 [[models]]
 name = "velvet"
 
-[models.model_params]
-# Required by the wrapper even though it is irrelevant for local velocity scores.
-hours_per_sde_unit = 2.0
-
 [models.model_params.vae]
 n_latent = 50
 stage1_epochs = 200

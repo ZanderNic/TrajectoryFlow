@@ -15,15 +15,20 @@ def build_knn_indices(
     metric: str = "euclidean",
 ) -> np.ndarray:
     """Build fixed nearest-neighbor indices and remove each cell's self-match."""
-    if embedding.ndim != 2:
-        raise ValueError("embedding must have shape [n_cells, n_features].")
+    embedding = np.asarray(embedding)
+    if embedding.ndim != 2 or 0 in embedding.shape:
+        raise ValueError("embedding must have non-empty shape [n_cells, n_features].")
+    if not np.isfinite(embedding).all():
+        raise ValueError("embedding contains non-finite values.")
+    if not metric:
+        raise ValueError("metric must not be empty.")
     if not 1 <= n_neighbors < len(embedding):
         raise ValueError("n_neighbors must be >= 1 and smaller than n_cells.")
 
     model = NearestNeighbors(n_neighbors=n_neighbors + 1, metric=metric)
     model.fit(embedding)
 
-    indices = model.kneighbors(return_distance=False)
+    indices = model.kneighbors(embedding, return_distance=False)
 
     # sklearn normally returns self as the first neighbor, but remove self
     # robustly instead of relying on that ordering.
@@ -79,27 +84,47 @@ def neighborhood_projection(
     sigma: float = 1.0,
 ) -> torch.Tensor:
     """
-    Expected local displacement under the velocity-guided transition weights.
+    Reproduce the released Velvet NeighborhoodConstraint.project calculation.
 
-    The paper additionally references a correction for non-uniform sampling
-    density. That correction is intentionally not guessed here.
+    The official implementation computes signed transition weights with
+    expm1(cosine / sigma^2), normalizes by the sum of absolute weights,
+    and applies the same density correction used in the released code.
     """
+    if sigma <= 0:
+        raise ValueError("sigma must be > 0.")
     if neighbor_z.ndim != 3:
         raise ValueError("neighbor_z must have shape [batch, n_neighbors, n_latent].")
     if neighbor_z.shape[0] != z.shape[0]:
         raise ValueError("neighbor_z and z must share the batch dimension.")
+    if velocity.shape != z.shape:
+        raise ValueError("velocity and z must have the same shape.")
 
     displacements = neighbor_z - z[:, None, :]
 
     cosine = F.cosine_similarity(
-        displacements,
         velocity[:, None, :],
+        displacements,
         dim=-1,
         eps=1e-8,
     )
 
-    probabilities = torch.softmax(cosine / (sigma**2), dim=-1)
-    return (probabilities[..., None] * displacements).sum(dim=1)
+    inverse_sigma = 1.0 / (sigma**2)
+    weights = torch.expm1(cosine * inverse_sigma)
+
+    denominator = weights.abs().sum(dim=1, keepdim=True).clamp_min(1e-8)
+    weights = weights / denominator
+
+    displacements = torch.nan_to_num(displacements)
+
+    subtractor = (
+        weights.mean(dim=1, keepdim=True)
+        * displacements.sum(dim=1)
+    )
+
+    return (
+        torch.einsum("bkd,bk->bd", displacements, weights)
+        - subtractor
+    )
 
 
 def neighborhood_constraint_loss(

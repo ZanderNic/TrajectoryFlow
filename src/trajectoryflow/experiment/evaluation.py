@@ -338,11 +338,12 @@ def library_log1p(
     library_size: float = 10_000.0,
     eps: float = 1e-8,
 ) -> torch.Tensor:
+    if library_size <= 0 or eps <= 0:
+        raise ValueError("library_size and eps must be > 0.")
     if expression.ndim not in (2, 3):
-        raise ValueError(
-            "expression must have shape [cells, genes] or [samples, cells, genes]."
-        )
-
+        raise ValueError("expression must have shape [cells, genes] or [samples, cells, genes].")
+    if 0 in expression.shape:
+        raise ValueError("expression dimensions must be non-zero.")
     if not torch.isfinite(expression).all():
         raise ValueError("expression contains non-finite values.")
 
@@ -390,17 +391,21 @@ class VelocityReference:
         components = np.asarray(self.pca_components, dtype=np.float64)
         mean = np.asarray(self.pca_mean, dtype=np.float64)
 
+        if not self.name.strip():
+            raise ValueError("VelocityReference name must not be empty.")
         if cell_ids.ndim != 1:
             raise ValueError("VelocityReference cell_ids must be one-dimensional.")
         # Duplicate cell IDs are allowed because one boundary cell can
         # contribute to multiple CBD source->target transitions.
+        if len(cell_ids) == 0 or np.any(cell_ids == ""):
+            raise ValueError("VelocityReference cell_ids must be non-empty strings.")
         if vectors.ndim != 2 or vectors.shape[0] != len(cell_ids):
             raise ValueError(
                 "VelocityReference vectors must have shape [n_cells, n_components]."
             )
-        if components.ndim != 2:
+        if components.ndim != 2 or 0 in components.shape:
             raise ValueError(
-                "VelocityReference pca_components must have shape "
+                "VelocityReference pca_components must have non-zero shape "
                 "[n_components, n_genes]."
             )
         if vectors.shape[1] != components.shape[0]:
@@ -409,6 +414,8 @@ class VelocityReference:
             )
         if mean.shape != (components.shape[1],):
             raise ValueError("pca_mean must have shape [n_genes].")
+        if not np.isfinite(vectors).all() or not np.isfinite(components).all() or not np.isfinite(mean).all():
+            raise ValueError("Velocity reference vectors/PCA arrays must be finite.")
         if self.expression_transform not in ("none", "library_log1p"):
             raise ValueError(
                 "expression_transform must be 'none' or 'library_log1p'."
@@ -430,9 +437,9 @@ class VelocityReference:
         if positions is not None:
             positions = np.asarray(positions, dtype=np.float64)
             if positions.shape != vectors.shape:
-                raise ValueError(
-                    "positions must have the same shape as reference vectors."
-                )
+                raise ValueError("positions must have the same shape as reference vectors.")
+            if not np.isfinite(positions).all():
+                raise ValueError("positions must contain only finite values.")
 
         groups = self.groups
         if groups is not None:
@@ -445,6 +452,10 @@ class VelocityReference:
             genes = np.asarray(genes).astype(str)
             if genes.shape != (components.shape[1],):
                 raise ValueError("genes must have shape [n_genes].")
+            if np.any(genes == ""):
+                raise ValueError("genes must be non-empty strings.")
+            if len(set(genes.tolist())) != len(genes):
+                raise ValueError("genes must be unique.")
 
         object.__setattr__(self, "cell_ids", cell_ids)
         object.__setattr__(self, "vectors", vectors)
@@ -565,7 +576,13 @@ def save_velocity_reference(
     if reference.genes is not None:
         arrays["genes"] = reference.genes
 
-    np.savez_compressed(path, **arrays)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        with temporary.open("wb") as file:
+            np.savez_compressed(file, **arrays)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _transform_numpy_expression(
@@ -575,6 +592,10 @@ def _transform_numpy_expression(
     eps: float = 1e-8,
 ) -> np.ndarray:
     expression = np.asarray(expression, dtype=np.float64)
+    if library_size <= 0 or eps <= 0:
+        raise ValueError("library_size and eps must be > 0.")
+    if not np.isfinite(expression).all():
+        raise ValueError("expression contains non-finite values.")
 
     if transform == "none":
         return expression
@@ -644,10 +665,12 @@ def velocity_alignment_metrics(
     reference = np.asarray(reference, dtype=np.float64)
     cell_ids = np.asarray(cell_ids).astype(str)
 
+    if eps <= 0:
+        raise ValueError("eps must be > 0.")
     if predicted.shape != reference.shape:
         raise ValueError("predicted and reference vectors must have the same shape.")
-    if predicted.ndim != 2:
-        raise ValueError("velocity vectors must have shape [n_cells, n_components].")
+    if predicted.ndim != 2 or predicted.shape[1] == 0:
+        raise ValueError("velocity vectors must have shape [n_cells, n_components] with n_components > 0.")
     if len(cell_ids) != len(predicted):
         raise ValueError("cell_ids length must match velocity rows.")
 

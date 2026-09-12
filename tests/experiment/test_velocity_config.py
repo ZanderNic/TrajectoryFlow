@@ -1,6 +1,7 @@
 # std-lib imports
 
 # 3 party imports
+import pytest
 
 # package imports
 from trajectoryflow.experiment.config import load_benchmark_config
@@ -52,3 +53,28 @@ partition = "all"
     assert task.reference == "pts"
     assert task.timepoints == ("5h",)
     assert task.partition == "all"
+
+
+def test_config_rejects_unknown_options(tmp_path):
+    path = tmp_path / "benchmark.toml"
+    path.write_text(
+        '''
+data_root = "data"
+save_predicitons = true
+
+[[models]]
+name = "dummy"
+
+[[splits]]
+name = "test"
+fit_timepoints = ["5h"]
+
+[[splits.test_velocity_tasks]]
+reference = "pts"
+timepoints = ["5h"]
+'''.strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unknown benchmark option"):
+        load_benchmark_config(path)
