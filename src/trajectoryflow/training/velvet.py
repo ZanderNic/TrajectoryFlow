@@ -9,7 +9,7 @@ from scipy import sparse
 # package imports
 from trajectoryflow.models.baselines.velvet.baseline import VelvetBaseline
 from trajectoryflow.models.baselines.velvet.data import VelvetData, build_velvet_neighbors
-from trajectoryflow.models.baselines.velvet.dynamics import estimate_gamma_extreme_regression
+from trajectoryflow.models.baselines.velvet.dynamics import estimate_gamma_extreme_regression_sparse
 from trajectoryflow.models.baselines.velvet.neighborhood import build_knn_indices, transition_probabilities
 from trajectoryflow.training.base import BaseTrainer
 
@@ -51,6 +51,19 @@ class VelvetTrainer(BaseTrainer):
         for start in range(0, n_cells, batch_size):
             yield indices[start : start + batch_size]
 
+    @staticmethod
+    def _microbatch_indices(indices: np.ndarray, microbatch_size: int | None):
+        if microbatch_size is None or microbatch_size >= len(indices):
+            yield indices
+            return
+        for start in range(0, len(indices), microbatch_size):
+            yield indices[start : start + microbatch_size]
+
+    @staticmethod
+    def _weighted_mean(metrics: list[tuple[int, dict[str, float]]]) -> dict[str, float]:
+        total = sum(weight for weight, _ in metrics)
+        return {key: sum(weight * values[key] for weight, values in metrics) / total for key in metrics[0][1]}
+
     def _dense(self, matrix: sparse.csr_matrix, indices: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(matrix[indices].toarray()).float().to(self.device)
 
@@ -60,7 +73,7 @@ class VelvetTrainer(BaseTrainer):
             return
         n_cells = min(config.gamma_init_cells, self.data.n_cells)
         indices = self._rng.choice(self.data.n_cells, size=n_cells, replace=False)
-        gamma = estimate_gamma_extreme_regression(total=self._dense(self.data.total, indices), new=self._dense(self.data.new, indices), labelling_time=config.labelling_time, quantile=config.gamma_extreme_quantile, ratio_eps=config.gamma_ratio_eps, default_gamma=config.gamma_default)
+        gamma = estimate_gamma_extreme_regression_sparse(total=self.data.total[indices], new=self.data.new[indices], labelling_time=config.labelling_time, quantile=config.gamma_extreme_quantile, ratio_eps=config.gamma_ratio_eps, default_gamma=config.gamma_default)
         self._log(f"[velvet gamma] min={gamma.min().item():.6g} median={gamma.median().item():.6g} max={gamma.max().item():.6g}")
         baseline.velvet.biophysics.set_gamma(gamma)
 
@@ -78,14 +91,18 @@ class VelvetTrainer(BaseTrainer):
         model.train()
         for epoch in range(config.stage1_epochs):
             metrics = []
-            for indices in self._batch_indices(self.data.n_cells, config.batch_size):
+            for batch_indices in self._batch_indices(self.data.n_cells, config.batch_size):
                 optimizer.zero_grad(set_to_none=True)
-                result = model.stage1_loss(total=self._dense(self.data.total, indices), new=self._dense(self.data.new, indices))
-                self._require_finite_loss(result, "stage 1")
-                result.loss.backward()
+                batch_metrics = []
+                for indices in self._microbatch_indices(batch_indices, config.microbatch_size):
+                    result = model.stage1_loss(total=self._dense(self.data.total, indices), new=self._dense(self.data.new, indices))
+                    self._require_finite_loss(result, "stage 1")
+                    weight = len(indices) / len(batch_indices)
+                    (result.loss * weight).backward()
+                    batch_metrics.append((len(indices), result.detached()))
                 optimizer.step()
-                metrics.append(result.detached())
-            mean = {key: float(np.mean([item[key] for item in metrics])) for key in metrics[0]}
+                metrics.append((len(batch_indices), self._weighted_mean(batch_metrics)))
+            mean = self._weighted_mean(metrics)
             self.history.stage1.append(mean)
             self._log(f"[velvet stage 1] {epoch + 1:4d}/{config.stage1_epochs} loss={mean['loss']:.4f} vae={(mean['reconstruction'] + mean['kl']):.4f} velocity={mean['velocity']:.4f}")
 
@@ -96,17 +113,21 @@ class VelvetTrainer(BaseTrainer):
         model.train()
         for epoch in range(config.stage2_epochs):
             metrics = []
-            for indices in self._batch_indices(self.data.n_cells, config.batch_size):
-                total, new = self._dense(self.data.total, indices), self._dense(self.data.new, indices)
-                z = all_z_cpu[indices].to(self.device)
-                neighbor_z = all_z_cpu[neighbor_indices[indices]].to(self.device)
+            for batch_indices in self._batch_indices(self.data.n_cells, config.batch_size):
                 optimizer.zero_grad(set_to_none=True)
-                result = model.stage2_loss(total=total, new=new, z=z, neighbor_z=neighbor_z)
-                self._require_finite_loss(result, "stage 2")
-                result.loss.backward()
+                batch_metrics = []
+                for indices in self._microbatch_indices(batch_indices, config.microbatch_size):
+                    total, new = self._dense(self.data.total, indices), self._dense(self.data.new, indices)
+                    z = all_z_cpu[indices].to(self.device)
+                    neighbor_z = all_z_cpu[neighbor_indices[indices]].to(self.device)
+                    result = model.stage2_loss(total=total, new=new, z=z, neighbor_z=neighbor_z)
+                    self._require_finite_loss(result, "stage 2")
+                    weight = len(indices) / len(batch_indices)
+                    (result.loss * weight).backward()
+                    batch_metrics.append((len(indices), result.detached()))
                 optimizer.step()
-                metrics.append(result.detached())
-            mean = {key: float(np.mean([item[key] for item in metrics])) for key in metrics[0]}
+                metrics.append((len(batch_indices), self._weighted_mean(batch_metrics)))
+            mean = self._weighted_mean(metrics)
             self.history.stage2.append(mean)
             self._log(f"[velvet stage 2] {epoch + 1:4d}/{config.stage2_epochs} loss={mean['loss']:.4f} velocity={mean['velocity']:.4f} neighbor={mean['neighborhood']:.4f}")
 

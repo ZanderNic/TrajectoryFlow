@@ -331,7 +331,7 @@ def main() -> None:
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
-    store = ScifateStore(config.data_root)
+    store = ScifateStore(config.data_root, cache_size=config.runtime.store_cache_size)
     registry = make_registry(config)
     runner = ExperimentRunner(config=config, registry=registry, store=store)
 

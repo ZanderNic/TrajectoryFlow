@@ -28,6 +28,7 @@ class VelvetVAEConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-3
     batch_size: int | None = None
+    microbatch_size: int | None = 256
     latent_batch_size: int = 2048
     initialize_gamma: bool = True
     gamma_init_cells: int = 5000
@@ -59,8 +60,10 @@ class VelvetVAEConfig:
             raise ValueError("dropout_rate must lie in [0, 1).")
         if isinstance(self.gamma_extreme_quantile, bool) or not isinstance(self.gamma_extreme_quantile, (int, float)) or not math.isfinite(self.gamma_extreme_quantile) or not 0 < self.gamma_extreme_quantile < 1:
             raise ValueError("gamma_extreme_quantile must lie in (0, 1).")
-        if self.batch_size is not None and (isinstance(self.batch_size, bool) or not isinstance(self.batch_size, int) or self.batch_size < 1):
-            raise ValueError("batch_size must be a positive integer or None.")
+        for name in ("batch_size", "microbatch_size"):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+                raise ValueError(f"{name} must be a positive integer or None.")
         if not isinstance(self.initialize_gamma, bool):
             raise ValueError("initialize_gamma must be boolean.")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):

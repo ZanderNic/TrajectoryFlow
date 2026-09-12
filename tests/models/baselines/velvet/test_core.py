@@ -1,6 +1,9 @@
 # std-lib imports
 
 # 3 party imports
+import numpy as np
+import pytest
+from scipy import sparse
 import torch
 
 # package imports
@@ -11,6 +14,7 @@ from trajectoryflow.models.baselines.velvet.config import (
 from trajectoryflow.models.baselines.velvet.dynamics import (
     MetabolicLabelingModel,
     estimate_gamma_extreme_regression,
+    estimate_gamma_extreme_regression_sparse,
 )
 from trajectoryflow.models.baselines.velvet.model import VelvetVAE
 from trajectoryflow.models.baselines.velvet.neighborhood import (
@@ -122,3 +126,20 @@ def test_gamma_initialization_stays_finite_when_new_exceeds_total():
 
     assert torch.isfinite(gamma).all()
     assert (gamma > 0).all()
+
+
+def test_sparse_gamma_initialization_matches_dense_reference():
+    rng = np.random.default_rng(0)
+    total = rng.poisson(2.0, size=(64, 17)).astype(np.float32)
+    new = (total * rng.uniform(0.05, 0.7, size=(1, 17))).astype(np.float32)
+
+    dense = estimate_gamma_extreme_regression(torch.from_numpy(total), torch.from_numpy(new), labelling_time=2.0)
+    streamed = estimate_gamma_extreme_regression_sparse(sparse.csr_matrix(total), sparse.csr_matrix(new), labelling_time=2.0)
+
+    assert torch.allclose(streamed, dense, rtol=1e-5, atol=1e-6)
+
+
+def test_velvet_microbatch_size_validation():
+    assert VelvetVAEConfig().microbatch_size == 256
+    with pytest.raises(ValueError, match="microbatch_size"):
+        VelvetVAEConfig(microbatch_size=0)

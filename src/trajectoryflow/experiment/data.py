@@ -125,6 +125,11 @@ class ExperimentData:
     def training_snapshots(self) -> tuple[SnapshotSelection, ...]:
         return tuple(self.training_snapshot(timepoint) for timepoint in self.training_timepoints)
 
+    def unload(self, timepoint: str) -> None:
+        unload = getattr(self._store, "unload", None)
+        if callable(unload):
+            unload(timepoint)
+
     def evaluation_snapshot(self, timepoint: str, phase: str, requested_partition: str = "auto") -> SnapshotSelection:
         if phase not in ("validation", "test"):
             raise ValueError("phase must be 'validation' or 'test'.")

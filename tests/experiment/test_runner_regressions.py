@@ -28,6 +28,15 @@ class StochasticAdapter(ExperimentModelAdapter):
         return TrajectoryPrediction(source[None] + noise, source_time, target_time)
 
 
+class RecordingAdapter(StochasticAdapter):
+    def __init__(self):
+        self.prediction_batch_sizes = []
+
+    def predict(self, built, source, source_time, target_time, n_samples):
+        self.prediction_batch_sizes.append(n_samples)
+        return super().predict(built, source, source_time, target_time, n_samples)
+
+
 class FailingAdapter(StochasticAdapter):
     def build(self, config, data, device, seed):
         raise RuntimeError("intentional build failure")
@@ -38,7 +47,9 @@ def mean_evaluator(prediction, target):
 
 
 def make_config(tmp_path, split_spec, **evaluation_overrides):
-    evaluation = EvaluationConfig(n_source_cells=None, n_target_cells=None, n_samples=3, space=EvaluationSpaceConfig(transform="none"), **evaluation_overrides)
+    values = {"n_source_cells": None, "n_target_cells": None, "n_samples": 3, "space": EvaluationSpaceConfig(transform="none")}
+    values.update(evaluation_overrides)
+    evaluation = EvaluationConfig(**values)
     return BenchmarkConfig(data_root=tmp_path / "data", output_dir=tmp_path / "runs", seeds=(0,), models=(ModelConfig(name="stochastic"),), splits=(split_spec,), evaluation=evaluation, runtime=RuntimeConfig(device="cpu"), save_checkpoints=False, save_predictions=False)
 
 
@@ -81,4 +92,17 @@ def test_checkpoint_and_prediction_flags_create_artifacts(tmp_path, fake_store):
     ExperimentRunner(config, make_registry(), fake_store).run(config.models[0], split, seed=0)
     root = config.output_dir / "stochastic" / split.name / "seed_0"
     assert (root / "checkpoint.pt").exists()
-    assert (root / "predictions" / "test__5h_to_10h.npz").exists()
+    prediction_dir = root / "predictions" / "test__5h_to_10h"
+    assert (prediction_dir / "sample_000.npz").exists()
+    assert len(list(prediction_dir.glob("sample_*.npz"))) == config.evaluation.n_samples
+
+
+def test_prediction_samples_are_streamed_in_configured_batches(tmp_path, fake_store):
+    split_spec, split = make_split(fake_store)
+    config = make_config(tmp_path, split_spec, n_samples=5, sample_batch_size=2, prediction_warmup_runs=0, prediction_timing_runs=1)
+    adapter = RecordingAdapter()
+
+    result = ExperimentRunner(config, make_registry(adapter), fake_store).run(config.models[0], split, seed=0)
+
+    assert adapter.prediction_batch_sizes == [2, 2, 1, 2, 2, 1]
+    assert result.tasks[0].n_samples == 5

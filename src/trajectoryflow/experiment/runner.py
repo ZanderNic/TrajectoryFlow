@@ -1,4 +1,6 @@
 # std-lib imports
+import copy
+import gc
 import hashlib
 import json
 import shutil
@@ -7,6 +9,7 @@ from pathlib import Path
 
 # 3 party imports
 import numpy as np
+import pandas as pd
 import torch
 
 # package imports
@@ -79,12 +82,12 @@ class RunArtifacts:
         name = f"{phase}__{task_name}".replace("/", "_")
         np.savez_compressed(folder / f"{name}.npz", source_indices=np.asarray(source_indices, dtype=np.int64), target_indices=np.asarray(target_indices, dtype=np.int64))
 
-    def save_prediction(self, phase: str, task_name: str, prediction) -> Path:
-        folder = self.root / "predictions"
-        folder.mkdir(exist_ok=True)
+    def save_prediction_sample(self, phase: str, task_name: str, sample_index: int, prediction, state: torch.Tensor) -> Path:
         name = f"{phase}__{task_name}".replace("/", "_").replace(" ", "_")
-        path = folder / f"{name}.npz"
-        np.savez_compressed(path, states=prediction.states.detach().cpu().numpy(), source_time=np.asarray(prediction.source_time), target_time=np.asarray(prediction.target_time))
+        folder = self.root / "predictions" / name
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"sample_{sample_index:03d}.npz"
+        np.savez_compressed(path, state=state.detach().cpu().numpy(), source_time=np.asarray(prediction.source_time), target_time=np.asarray(prediction.target_time))
         return path
 
     def velocity_folder(self, phase: str, task_name: str) -> Path:
@@ -99,9 +102,9 @@ class RunArtifacts:
         per_cell.to_csv(folder / "cells.csv", index=False)
         return folder
 
-    def save_velocity_prediction(self, phase: str, task_name: str, gene_velocity: np.ndarray, projected_velocity: np.ndarray, cell_ids: np.ndarray) -> Path:
+    def save_velocity_prediction(self, phase: str, task_name: str, projected_velocity: np.ndarray, cell_ids: np.ndarray) -> Path:
         path = self.velocity_folder(phase, task_name) / "prediction.npz"
-        np.savez_compressed(path, cell_ids=np.asarray(cell_ids).astype(str), gene_velocity=np.asarray(gene_velocity, dtype=np.float32), projected_velocity=np.asarray(projected_velocity, dtype=np.float32))
+        np.savez_compressed(path, cell_ids=np.asarray(cell_ids).astype(str), projected_velocity=np.asarray(projected_velocity, dtype=np.float32))
         return path
 
     def _write_json(self, name: str, value) -> None:
@@ -155,12 +158,43 @@ def dense_expression(selection, device: torch.device) -> torch.Tensor:
     return torch.from_numpy(selection.expression.toarray()).float().to(device)
 
 
+def _clear_store_cache(store) -> None:
+    clear = getattr(store, "clear_cache", None)
+    if callable(clear):
+        clear()
+
+
 def _replace_prediction_states(prediction, states: torch.Tensor):
     try:
         return replace(prediction, states=states)
     except TypeError:
-        prediction.states = states
-        return prediction
+        cloned = copy.copy(prediction)
+        cloned.states = states
+        return cloned
+
+
+def _aggregate_metric_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if not frames:
+        return pd.DataFrame()
+
+    first = frames[0].copy()
+    value_column = "value" if "value" in first.columns else "mean"
+    identity_columns = [column for column in ("metric", "group") if column in first.columns]
+    identity = first[identity_columns].fillna("").astype(str).to_numpy() if identity_columns else None
+    values = []
+
+    for frame in frames:
+        column = "value" if "value" in frame.columns else "mean"
+        if len(frame) != len(first) or column != value_column:
+            raise ValueError("Evaluator returned inconsistent metric rows across prediction samples.")
+        if identity_columns and not np.array_equal(frame[identity_columns].fillna("").astype(str).to_numpy(), identity):
+            raise ValueError("Evaluator metric identities changed across prediction samples.")
+        values.append(pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=np.float64))
+
+    stacked = np.vstack(values)
+    first[value_column] = np.nanmean(stacked, axis=0)
+    first["std"] = np.nanstd(stacked, axis=0, ddof=1) if len(frames) > 1 else 0.0
+    return first
 
 
 class ExperimentRunner:
@@ -205,6 +239,12 @@ class ExperimentRunner:
                     if checkpoint is not None:
                         artifacts.save_checkpoint(checkpoint)
 
+                adapter.release_training_resources(built)
+                _clear_store_cache(self.store)
+                gc.collect()
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
+
                 for phase, tasks in (("validation", split.validation_tasks), ("test", split.test_tasks)):
                     for task in tasks:
                         result.tasks.append(self._evaluate_task(adapter, built, data, split, task, phase, seed, artifacts))
@@ -225,69 +265,113 @@ class ExperimentRunner:
 
         result.total = total_profiler.stats
         artifacts.save_result(result)
+        _clear_store_cache(self.store)
+        gc.collect()
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
         if error_to_raise is not None:
             raise error_to_raise
         return result
 
-    def _predict(self, adapter, built, source, source_time: float, target_time: float):
-        return adapter.predict(built=built, source=source, source_time=source_time, target_time=target_time, n_samples=self.config.evaluation.n_samples)
+    def _predict(self, adapter, built, source, source_time: float, target_time: float, n_samples: int):
+        with torch.inference_mode():
+            return adapter.predict(built=built, source=source, source_time=source_time, target_time=target_time, n_samples=n_samples)
+
+    def _prediction_batches(self, adapter, built, source, source_time: float, target_time: float):
+        remaining = self.config.evaluation.n_samples
+        batch_size = min(self.config.evaluation.sample_batch_size, remaining)
+        while remaining:
+            current = min(batch_size, remaining)
+            yield self._predict(adapter, built, source, source_time, target_time, current)
+            remaining -= current
+
+    def _discard_prediction_batches(self, adapter, built, source, source_time: float, target_time: float) -> None:
+        for prediction in self._prediction_batches(adapter, built, source, source_time, target_time):
+            del prediction
 
     def _evaluate_task(self, adapter, built, data: ExperimentData, split: ResolvedSplit, task, phase: str, seed: int, artifacts: RunArtifacts) -> TaskResult:
         with PhaseProfiler(self.device) as prep_profiler:
             task_data = self.sampler.sample_task(data.task_data(task, phase=phase), split_name=split.name, seed=seed)
+            source_time, target_time = task_data.source.time_hours, task_data.target.time_hours
+            source_indices, target_indices = task_data.source.indices.copy(), task_data.target.indices.copy()
+            n_source_cells, n_target_cells = len(task_data.source), len(task_data.target)
             source, target = dense_expression(task_data.source, self.device), dense_expression(task_data.target, self.device)
-        artifacts.save_task_indices(phase, task.task_name, task_data.source.indices, task_data.target.indices)
+            del task_data
+            _clear_store_cache(self.store)
+            gc.collect()
+        artifacts.save_task_indices(phase, task.task_name, source_indices, target_indices)
 
         for run_id in range(self.config.evaluation.prediction_warmup_runs):
             self._seed_prediction(seed, split, phase, task.task_name, "warmup", run_id)
-            self._predict(adapter, built, source, task_data.source.time_hours, task_data.target.time_hours)
+            self._discard_prediction_batches(adapter, built, source, source_time, target_time)
 
         prediction_runs = []
         for run_id in range(self.config.evaluation.prediction_timing_runs):
             self._seed_prediction(seed, split, phase, task.task_name, "timing", run_id)
             with PhaseProfiler(self.device) as profiler:
-                self._predict(adapter, built, source, task_data.source.time_hours, task_data.target.time_hours)
+                self._discard_prediction_batches(adapter, built, source, source_time, target_time)
             prediction_runs.append(profiler.stats)
 
-        # Evaluation gets its own fixed seed and prediction. Profiling settings must not change metrics.
         self._seed_prediction(seed, split, phase, task.task_name, "evaluation")
-        prediction = self._predict(adapter, built, source, task_data.source.time_hours, task_data.target.time_hours)
-        if self.config.save_predictions:
-            artifacts.save_prediction(phase, task.task_name, prediction)
-
+        metric_frames, sample_index = [], 0
         with PhaseProfiler(self.device) as evaluation_profiler:
-            states = transform_evaluation_space(prediction.states, self.config.evaluation.space.transform, self.config.evaluation.space.library_size)
-            transformed_prediction = _replace_prediction_states(prediction, states)
             transformed_target = transform_evaluation_space(target, self.config.evaluation.space.transform, self.config.evaluation.space.library_size)
-            metric_frame = self.registry.evaluator.evaluate(transformed_prediction, transformed_target)
+            del target
+            for prediction in self._prediction_batches(adapter, built, source, source_time, target_time):
+                for local_index in range(prediction.states.shape[0]):
+                    state = prediction.states[local_index : local_index + 1]
+                    if self.config.save_predictions:
+                        artifacts.save_prediction_sample(phase, task.task_name, sample_index, prediction, state[0])
+                    transformed_state = transform_evaluation_space(state, self.config.evaluation.space.transform, self.config.evaluation.space.library_size)
+                    transformed_prediction = _replace_prediction_states(prediction, transformed_state)
+                    metric_frames.append(self.registry.evaluator.evaluate(transformed_prediction, transformed_target))
+                    sample_index += 1
+                del prediction
+            metric_frame = _aggregate_metric_frames(metric_frames)
 
-        return TaskResult(phase=phase, task_name=task.task_name, task_kind=task.resolved_kind(split.fit_timepoints), source=task.source, target=task.target, delta_hours=task.delta_hours, n_source_cells=len(task_data.source), n_target_cells=len(task_data.target), n_samples=self.config.evaluation.n_samples, metrics=metric_values_from_frame(metric_frame), data_prep=prep_profiler.stats, prediction_runs=prediction_runs, evaluation=evaluation_profiler.stats, source_indices_fingerprint=indices_fingerprint(task_data.source.indices), target_indices_fingerprint=indices_fingerprint(task_data.target.indices))
+        return TaskResult(phase=phase, task_name=task.task_name, task_kind=task.resolved_kind(split.fit_timepoints), source=task.source, target=task.target, delta_hours=task.delta_hours, n_source_cells=n_source_cells, n_target_cells=n_target_cells, n_samples=self.config.evaluation.n_samples, metrics=metric_values_from_frame(metric_frame), data_prep=prep_profiler.stats, prediction_runs=prediction_runs, evaluation=evaluation_profiler.stats, source_indices_fingerprint=indices_fingerprint(source_indices), target_indices_fingerprint=indices_fingerprint(target_indices))
 
-    def _velocity_inputs(self, data: ExperimentData, task: VelocityTask, phase: str):
+    def _velocity_metadata(self, data: ExperimentData, task: VelocityTask, phase: str):
         config = self.config.evaluation.velocity
-        expression_parts, cell_id_parts, label_parts, timepoint_parts = [], [], [], []
-        for selection in data.velocity_task_data(task, phase=phase).snapshots:
+        cell_id_parts, label_parts, timepoint_parts, row_index_parts = [], [], [], []
+
+        for timepoint in task.timepoints:
+            selection = data.evaluation_snapshot(timepoint, phase, task.partition)
             obs = selection.obs
             if config.cell_id_column not in obs.columns:
                 raise KeyError(f"Velocity evaluation requires obs column {config.cell_id_column!r}.")
-            expression_parts.append(selection.expression.toarray())
             cell_id_parts.append(obs[config.cell_id_column].astype(str).to_numpy())
-            timepoint_parts.append(np.full(len(selection), selection.timepoint, dtype=str))
-            labels = obs[config.color_by].astype(str).to_numpy() if config.color_by is not None and config.color_by in obs.columns else np.full(len(selection), selection.timepoint, dtype=str)
+            timepoint_parts.append(np.full(len(selection), selection.timepoint, dtype=object))
+            row_index_parts.append(selection.indices.copy())
+            labels = obs[config.color_by].astype(str).to_numpy() if config.color_by is not None and config.color_by in obs.columns else np.full(len(selection), selection.timepoint, dtype=object)
             label_parts.append(labels)
-        return np.vstack(expression_parts).astype(np.float32, copy=False), np.concatenate(cell_id_parts), np.concatenate(label_parts), np.concatenate(timepoint_parts)
+            data.unload(timepoint)
 
-    def _match_velocity_reference(self, expression, cell_ids, labels, timepoints, reference, seed: int, split: ResolvedSplit, phase: str, task: VelocityTask):
+        return np.concatenate(cell_id_parts), np.concatenate(label_parts), np.concatenate(timepoint_parts), np.concatenate(row_index_parts)
+
+    def _match_velocity_reference(self, cell_ids, labels, timepoints, row_indices, reference, seed: int, split: ResolvedSplit, phase: str, task: VelocityTask):
         query_indices, reference_indices = reference.indices_for(cell_ids)
         if not len(query_indices):
             raise ValueError(f"Velocity task {task.task_name!r} has no cells matching reference {task.reference!r}.")
-        expression, cell_ids, labels, timepoints = expression[query_indices], cell_ids[query_indices], labels[query_indices], timepoints[query_indices]
+
+        cell_ids, labels, timepoints, row_indices = cell_ids[query_indices], labels[query_indices], timepoints[query_indices], row_indices[query_indices]
         n_cells = self.config.evaluation.velocity.n_cells
-        if n_cells is not None and len(expression) > n_cells:
+        if n_cells is not None and len(cell_ids) > n_cells:
             rng = np.random.default_rng(stable_seed(seed, split.name, phase, task.task_name, "velocity_cells"))
-            keep = np.sort(rng.choice(len(expression), size=n_cells, replace=False))
-            expression, cell_ids, labels, timepoints, reference_indices = expression[keep], cell_ids[keep], labels[keep], timepoints[keep], reference_indices[keep]
-        return expression, cell_ids, labels, timepoints, reference_indices
+            keep = np.sort(rng.choice(len(cell_ids), size=n_cells, replace=False))
+            cell_ids, labels, timepoints, row_indices, reference_indices = cell_ids[keep], labels[keep], timepoints[keep], row_indices[keep], reference_indices[keep]
+        return cell_ids, labels, timepoints, row_indices, reference_indices
+
+    def _velocity_expression_rows(self, timepoints: np.ndarray, row_indices: np.ndarray) -> np.ndarray:
+        expression = np.empty((len(row_indices), self.store.n_genes), dtype=np.float32)
+        for timepoint in np.unique(timepoints):
+            positions = np.flatnonzero(timepoints == timepoint)
+            snapshot = self.store.load(timepoint)
+            expression[positions] = snapshot.expression[row_indices[positions]].toarray().astype(np.float32, copy=False)
+            unload = getattr(self.store, "unload", None)
+            if callable(unload):
+                unload(timepoint)
+        return expression
 
     def _velocity_plots(self, folder: Path, positions: np.ndarray, projected: np.ndarray, reference_vectors: np.ndarray, labels: np.ndarray, per_cell, built, task: VelocityTask, seed: int, artifacts: RunArtifacts) -> list[str]:
         config = self.config.evaluation.velocity
@@ -304,19 +388,29 @@ class ExperimentRunner:
 
         reference = load_velocity_reference(_reference_path(self.config.evaluation.velocity.reference_dir, task.reference))
         _validate_reference_genes(reference, data)
-        values = self._velocity_inputs(data, task, phase)
-        expression, cell_ids, labels, timepoints, reference_indices = self._match_velocity_reference(*values, reference, seed, split, phase, task)
-        source = torch.from_numpy(expression).float().to(self.device)
-
-        self._seed_prediction(seed, split, phase, task.task_name, "velocity")
-        with PhaseProfiler(self.device) as prediction_profiler:
-            gene_velocity = adapter.predict_velocity(built=built, source=source).detach().cpu().numpy()
+        metadata = self._velocity_metadata(data, task, phase)
+        cell_ids, labels, timepoints, row_indices, reference_indices = self._match_velocity_reference(*metadata, reference, seed, split, phase, task)
         reference_vectors = reference.vectors[reference_indices]
         groups = reference.groups[reference_indices] if reference.groups is not None else None
+        projected = np.empty((len(cell_ids), reference.n_components), dtype=np.float32)
+        computed_positions = np.empty_like(projected)
 
+        self._seed_prediction(seed, split, phase, task.task_name, "velocity")
+        batch_size = self.config.evaluation.velocity.batch_size
+        with PhaseProfiler(self.device) as prediction_profiler:
+            for start in range(0, len(cell_ids), batch_size):
+                stop = min(start + batch_size, len(cell_ids))
+                expression = self._velocity_expression_rows(timepoints[start:stop], row_indices[start:stop])
+                source = torch.from_numpy(expression).to(self.device)
+                with torch.inference_mode():
+                    gene_velocity = adapter.predict_velocity(built=built, source=source).detach().cpu().numpy()
+                positions_batch, projected_batch = project_velocity_to_reference(expression, gene_velocity, reference)
+                computed_positions[start:stop] = positions_batch
+                projected[start:stop] = projected_batch
+                del source, gene_velocity, expression
+
+        positions = reference.positions[reference_indices] if reference.positions is not None else computed_positions
         with PhaseProfiler(self.device) as evaluation_profiler:
-            computed_positions, projected = project_velocity_to_reference(expression, gene_velocity, reference)
-            positions = reference.positions[reference_indices] if reference.positions is not None else computed_positions
             metric_frame, per_cell = velocity_alignment_metrics(projected, reference_vectors, cell_ids, groups, reference.alignment_mode)
 
         per_cell.insert(1, "timepoint", timepoints)
@@ -327,7 +421,7 @@ class ExperimentRunner:
 
         folder = artifacts.save_velocity_evaluation(phase, task.task_name, metric_frame, per_cell)
         if self.config.save_predictions:
-            artifacts.save_velocity_prediction(phase, task.task_name, gene_velocity, projected, cell_ids)
+            artifacts.save_velocity_prediction(phase, task.task_name, projected, cell_ids)
         plot_paths = self._velocity_plots(folder, positions, projected, reference_vectors, labels, per_cell, built, task, seed, artifacts)
         return VelocityTaskResult(phase=phase, task_name=task.task_name, reference=reference.name, timepoints=task.timepoints, n_cells=len(cell_ids), n_reference_components=reference.n_components, status="completed", metrics=metric_values_from_frame(metric_frame), prediction=prediction_profiler.stats, evaluation=evaluation_profiler.stats, cell_indices_fingerprint=strings_fingerprint(cell_ids), plot_paths=plot_paths)
 

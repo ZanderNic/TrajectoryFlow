@@ -79,8 +79,8 @@ def normalized_svd_embedding(total: sparse.csr_matrix, n_components: int = 50, t
     x = total.astype(np.float32, copy=True)
     library = np.asarray(x.sum(axis=1)).ravel()
     scale = np.divide(target_sum, library, out=np.zeros_like(library, dtype=np.float32), where=library > 0)
-    x = (sparse.diags(scale) @ x).tocsr()
-    x.data = np.log1p(x.data)
+    x.data *= np.repeat(scale, np.diff(x.indptr))
+    np.log1p(x.data, out=x.data)
     n_components = min(n_components, x.shape[0] - 1, x.shape[1] - 1)
     if n_components < 1:
         raise ValueError("Not enough cells/features for an SVD embedding.")

@@ -66,6 +66,7 @@ class VelocityEvaluationConfig:
     enabled: bool = False
     reference_dir: Path = Path("data/processed/scifate2/velocity_references")
     n_cells: int | None = None
+    batch_size: int = 256
     plots: bool = True
     plot_max_cells: int = 4000
     plot_max_arrows: int = 300
@@ -75,6 +76,8 @@ class VelocityEvaluationConfig:
     def __post_init__(self) -> None:
         if self.n_cells is not None and (isinstance(self.n_cells, bool) or not isinstance(self.n_cells, int) or self.n_cells < 1):
             raise ValueError("velocity n_cells must be a positive integer or None.")
+        if isinstance(self.batch_size, bool) or not isinstance(self.batch_size, int) or self.batch_size < 1:
+            raise ValueError("velocity batch_size must be a positive integer.")
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in (self.plot_max_cells, self.plot_max_arrows)):
             raise ValueError("Velocity plot limits must be positive integers.")
         if not isinstance(self.enabled, bool) or not isinstance(self.plots, bool):
@@ -88,6 +91,7 @@ class EvaluationConfig:
     n_source_cells: int | None = 1000
     n_target_cells: int | None = 1000
     n_samples: int = 10
+    sample_batch_size: int = 1
     prediction_warmup_runs: int = 0
     prediction_timing_runs: int = 1
     space: EvaluationSpaceConfig = field(default_factory=EvaluationSpaceConfig)
@@ -97,7 +101,7 @@ class EvaluationConfig:
         for name, value in (("n_source_cells", self.n_source_cells), ("n_target_cells", self.n_target_cells)):
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
                 raise ValueError(f"{name} must be a positive integer or None.")
-        for name, value, minimum in (("n_samples", self.n_samples, 1), ("prediction_warmup_runs", self.prediction_warmup_runs, 0), ("prediction_timing_runs", self.prediction_timing_runs, 1)):
+        for name, value, minimum in (("n_samples", self.n_samples, 1), ("sample_batch_size", self.sample_batch_size, 1), ("prediction_warmup_runs", self.prediction_warmup_runs, 0), ("prediction_timing_runs", self.prediction_timing_runs, 1)):
             if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}.")
 
@@ -107,6 +111,7 @@ class RuntimeConfig:
     device: str = "auto"
     deterministic: bool = True
     precision: Precision = "float32"
+    store_cache_size: int = 0
     allow_tf32: bool = False
     cudnn_benchmark: bool = False
 
@@ -115,6 +120,8 @@ class RuntimeConfig:
             raise ValueError("device must not be empty.")
         if self.precision not in _PRECISIONS:
             raise ValueError(f"Unsupported precision {self.precision!r}; expected one of {sorted(_PRECISIONS)}.")
+        if isinstance(self.store_cache_size, bool) or not isinstance(self.store_cache_size, int) or self.store_cache_size < 0:
+            raise ValueError("store_cache_size must be an integer >= 0.")
         if any(not isinstance(value, bool) for value in (self.deterministic, self.allow_tf32, self.cudnn_benchmark)):
             raise ValueError("deterministic, allow_tf32 and cudnn_benchmark must be boolean.")
         if self.deterministic and self.cudnn_benchmark:
@@ -225,18 +232,18 @@ def load_benchmark_config(path: str | Path) -> BenchmarkConfig:
     training = TrainingConfig(budget=TrainingBudget(max_seconds=budget_raw.get("max_seconds"), max_epochs=budget_raw.get("max_epochs"), max_steps=budget_raw.get("max_steps")), early_stopping=EarlyStoppingConfig(**early_raw) if early_raw is not None else None)
 
     evaluation_raw = raw.get("evaluation", {})
-    _reject_unknown(evaluation_raw, {"n_source_cells", "n_target_cells", "n_samples", "prediction_warmup_runs", "prediction_timing_runs", "space", "velocity"}, "evaluation")
+    _reject_unknown(evaluation_raw, {"n_source_cells", "n_target_cells", "n_samples", "sample_batch_size", "prediction_warmup_runs", "prediction_timing_runs", "space", "velocity"}, "evaluation")
     space_raw = evaluation_raw.get("space", {})
     _reject_unknown(space_raw, {"transform", "library_size"}, "evaluation space")
     velocity_raw = evaluation_raw.get("velocity", {})
-    _reject_unknown(velocity_raw, {"enabled", "reference_dir", "n_cells", "plots", "plot_max_cells", "plot_max_arrows", "cell_id_column", "color_by"}, "velocity evaluation")
+    _reject_unknown(velocity_raw, {"enabled", "reference_dir", "n_cells", "batch_size", "plots", "plot_max_cells", "plot_max_arrows", "cell_id_column", "color_by"}, "velocity evaluation")
     evaluation = EvaluationConfig(
-        n_source_cells=evaluation_raw.get("n_source_cells", 1000), n_target_cells=evaluation_raw.get("n_target_cells", 1000), n_samples=evaluation_raw.get("n_samples", 10),
+        n_source_cells=evaluation_raw.get("n_source_cells", 1000), n_target_cells=evaluation_raw.get("n_target_cells", 1000), n_samples=evaluation_raw.get("n_samples", 10), sample_batch_size=evaluation_raw.get("sample_batch_size", 1),
         prediction_warmup_runs=evaluation_raw.get("prediction_warmup_runs", 0), prediction_timing_runs=evaluation_raw.get("prediction_timing_runs", 1),
         space=EvaluationSpaceConfig(transform=space_raw.get("transform", "library_log1p"), library_size=space_raw.get("library_size", 10_000.0)),
-        velocity=VelocityEvaluationConfig(enabled=velocity_raw.get("enabled", False), reference_dir=Path(velocity_raw.get("reference_dir", "data/processed/scifate2/velocity_references")), n_cells=velocity_raw.get("n_cells"), plots=velocity_raw.get("plots", True), plot_max_cells=velocity_raw.get("plot_max_cells", 4000), plot_max_arrows=velocity_raw.get("plot_max_arrows", 300), cell_id_column=velocity_raw.get("cell_id_column", "cell_id"), color_by=velocity_raw.get("color_by", "cell_type")),
+        velocity=VelocityEvaluationConfig(enabled=velocity_raw.get("enabled", False), reference_dir=Path(velocity_raw.get("reference_dir", "data/processed/scifate2/velocity_references")), n_cells=velocity_raw.get("n_cells"), batch_size=velocity_raw.get("batch_size", 256), plots=velocity_raw.get("plots", True), plot_max_cells=velocity_raw.get("plot_max_cells", 4000), plot_max_arrows=velocity_raw.get("plot_max_arrows", 300), cell_id_column=velocity_raw.get("cell_id_column", "cell_id"), color_by=velocity_raw.get("color_by", "cell_type")),
     )
 
     runtime_raw = raw.get("runtime", {})
-    _reject_unknown(runtime_raw, {"device", "deterministic", "precision", "allow_tf32", "cudnn_benchmark"}, "runtime")
+    _reject_unknown(runtime_raw, {"device", "deterministic", "precision", "store_cache_size", "allow_tf32", "cudnn_benchmark"}, "runtime")
     return BenchmarkConfig(data_root=Path(raw["data_root"]), output_dir=Path(raw.get("output_dir", "runs/benchmark")), seeds=tuple(raw.get("seeds", (0,))), models=tuple(_model(model) for model in raw.get("models", ())), splits=tuple(_split(split) for split in raw.get("splits", ())), training=training, evaluation=evaluation, runtime=RuntimeConfig(**runtime_raw), fail_fast=raw.get("fail_fast", True), save_checkpoints=raw.get("save_checkpoints", True), save_predictions=raw.get("save_predictions", False))

@@ -93,6 +93,9 @@ class ExperimentModelAdapter(ABC):
 
         return None
 
+    def release_training_resources(self, built: BuiltExperimentModel) -> None:
+        """Release adapter-owned training data that is not needed for inference."""
+
 
 class EvaluationAdapter(ABC):
 
@@ -169,15 +172,23 @@ class NoChangeExperimentAdapter(ExperimentModelAdapter):
 def build_velvet_training_data(data: ExperimentData):
     from trajectoryflow.models.baselines.velvet.data import VelvetData
 
-    snapshots = data.training_snapshots()
-    total = sparse.vstack([snapshot.expression for snapshot in snapshots], format="csr")
-    new = sparse.vstack([snapshot.new for snapshot in snapshots], format="csr")
-    obs_parts = []
-    for snapshot in snapshots:
+    total_parts, new_parts, obs_parts = [], [], []
+    for timepoint in data.training_timepoints:
+        snapshot = data.training_snapshot(timepoint)
+        total_parts.append(snapshot.expression.astype("float32", copy=False))
+        new_parts.append(snapshot.new.astype("float32", copy=False))
         obs = snapshot.obs.copy()
         obs["timepoint"], obs["time_hours"] = snapshot.timepoint, snapshot.time_hours
         obs_parts.append(obs)
-    return VelvetData(total=total, new=new, obs=pd.concat(obs_parts, ignore_index=True), timepoints=data.training_timepoints)
+        data.unload(timepoint)
+        del snapshot
+
+    total = sparse.vstack(total_parts, format="csr")
+    total_parts.clear()
+    new = sparse.vstack(new_parts, format="csr")
+    new_parts.clear()
+    obs = pd.concat(obs_parts, ignore_index=True)
+    return VelvetData(total=total, new=new, obs=obs, timepoints=data.training_timepoints)
 
 
 class VelvetExperimentAdapter(ExperimentModelAdapter):
@@ -254,3 +265,8 @@ class VelvetExperimentAdapter(ExperimentModelAdapter):
             "sde_config": asdict(model.sde.config),
             "hours_per_sde_unit": model.hours_per_sde_unit,
         }
+
+    def release_training_resources(self, built: BuiltExperimentModel) -> None:
+        if built.trainer is not None:
+            built.trainer.data = None
+            built.trainer.neighbor_indices = None

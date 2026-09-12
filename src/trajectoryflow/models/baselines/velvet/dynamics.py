@@ -2,6 +2,8 @@
 import math
 
 # 3 party imports
+import numpy as np
+from scipy import sparse
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -200,4 +202,61 @@ def estimate_gamma_extreme_regression(
         raise RuntimeError("Gamma initialization produced non-finite values.")
 
     return gamma
+
+def estimate_gamma_extreme_regression_sparse(
+    total: sparse.spmatrix,
+    new: sparse.spmatrix,
+    labelling_time: float,
+    quantile: float = 0.95,
+    ratio_eps: float = 1e-6,
+    default_gamma: float = 0.1,
+) -> torch.Tensor:
+    """Memory-bounded equivalent of :func:`estimate_gamma_extreme_regression`.
+
+    The dense reference routine needs both sampled cell-by-gene matrices in
+    memory and promotes them to float64. This implementation keeps the sampled
+    matrices sparse and materializes only one gene vector at a time. The same
+    extreme-value slope and gamma transformation are applied gene by gene.
+    """
+    if total.shape != new.shape:
+        raise ValueError(f"total/new shape mismatch: {total.shape} vs {new.shape}.")
+    if not 0 < quantile < 1:
+        raise ValueError("quantile must lie strictly between 0 and 1.")
+    if not 0 < ratio_eps < 0.5:
+        raise ValueError("ratio_eps must lie between 0 and 0.5.")
+    if labelling_time <= 0:
+        raise ValueError("labelling_time must be > 0.")
+
+    total_csc = sparse.csc_matrix(total, dtype=np.float32)
+    new_csc = sparse.csc_matrix(new, dtype=np.float32)
+    gamma = np.full(total.shape[1], float(default_gamma), dtype=np.float64)
+
+    for gene in range(total.shape[1]):
+        x = total_csc.getcol(gene).toarray().ravel().astype(np.float64, copy=False)
+        positive = x > ratio_eps
+        if positive.sum() < 4:
+            continue
+
+        y = new_csc.getcol(gene).toarray().ravel().astype(np.float64, copy=False)
+        x_positive, y_positive = x[positive], y[positive]
+        threshold = np.quantile(x_positive, quantile)
+        extreme = x_positive >= threshold
+        x_extreme, y_extreme = x_positive[extreme], y_positive[extreme]
+        denominator = np.square(x_extreme).sum()
+        if not np.isfinite(denominator) or denominator <= ratio_eps:
+            continue
+
+        k = np.dot(x_extreme, y_extreme) / denominator
+        if not np.isfinite(k):
+            continue
+
+        k = np.clip(k, ratio_eps, 1.0 - ratio_eps)
+        value = -np.log1p(-k) / labelling_time
+        if np.isfinite(value) and value > 0:
+            gamma[gene] = value
+
+    output = torch.from_numpy(gamma.astype(np.float32, copy=False))
+    if not torch.isfinite(output).all():
+        raise RuntimeError("Gamma initialization produced non-finite values.")
+    return output
 

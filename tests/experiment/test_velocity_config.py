@@ -15,10 +15,17 @@ data_root = "data"
 output_dir = "runs/test"
 seeds = [0]
 
+[evaluation]
+sample_batch_size = 2
+
+[runtime]
+store_cache_size = 0
+
 [evaluation.velocity]
 enabled = true
 reference_dir = "refs"
 n_cells = 123
+batch_size = 64
 plots = false
 plot_max_cells = 500
 plot_max_arrows = 50
@@ -45,7 +52,10 @@ partition = "all"
 
     assert config.evaluation.velocity.enabled
     assert config.evaluation.velocity.reference_dir.name == "refs"
+    assert config.evaluation.sample_batch_size == 2
+    assert config.runtime.store_cache_size == 0
     assert config.evaluation.velocity.n_cells == 123
+    assert config.evaluation.velocity.batch_size == 64
     assert not config.evaluation.velocity.plots
 
     task = config.splits[0].test_velocity_tasks[0]
