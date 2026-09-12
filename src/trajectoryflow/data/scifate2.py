@@ -989,7 +989,7 @@ def prepare_scifate2(
     authors_cell_types: bool = False,
     authors_counting_h5ad: Path | None = None,
     force_authors_cell_types: bool = False,
-    strict_authors_cell_types: bool = True,
+    authors_chunk_size: int = 2048,
 ) -> None:
     if dataset not in FILES:
         raise ValueError(
@@ -1049,7 +1049,7 @@ def prepare_scifate2(
             )
         annotation_cache = work_dir / "GSE236512_authors_cell_annotations.csv"
         cell_annotations = load_or_reconstruct_authors_cell_annotations(
-            authors_counting_h5ad, annotation_cache, force=force_authors_cell_types, strict=strict_authors_cell_types
+            authors_counting_h5ad, annotation_cache, force=force_authors_cell_types, chunk_size=authors_chunk_size,
         )
         annotation_cell_id_column = "cell_id"
         annotation_cell_type_column = "cell_annotation"

@@ -184,11 +184,11 @@ def test_prepare_scifate2_reconstructs_authors_annotations_from_counting(tmp_pat
     cache = tmp_path / "raw" / "GSE236512_authors_cell_annotations.csv"
     captured = {}
 
-    def fake_annotations(counting_h5ad, cache_csv, force=False, strict=True):
+    def fake_annotations(counting_h5ad, cache_csv, force=False, chunk_size=2048):
         assert counting_h5ad == counting
         assert cache_csv == cache
         assert force is True
-        assert strict is True
+        assert chunk_size == 2048
         cache_csv.parent.mkdir(parents=True, exist_ok=True)
         cache_csv.write_text("cell_id,cell_annotation\na,NMP\n", encoding="utf-8")
         return cache_csv

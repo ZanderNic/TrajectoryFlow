@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--authors-cell-types", action="store_true", help="Reconstruct the published Maizels et al. cell annotations from the counting H5AD and merge them by cell ID.")
     parser.add_argument("--authors-counting-h5ad", type=Path, default=None, help="Optional local counting H5AD used for --authors-cell-types; downloaded from GEO when omitted and not cached.")
     parser.add_argument("--force-authors-cell-types", action="store_true", help="Recompute the authors' annotation cache even when a valid cache exists.")
-    parser.add_argument("--allow-authors-annotation-drift", action="store_true", help="Allow applying the published cluster mapping when reconstructed cell/gene/cluster counts differ. Not recommended for paper results.")
+    parser.add_argument("--authors-chunk-size", type=int, default=2048, help="Rows read at once while reconstructing authors' cell types. Lower this if RAM is tight; outputs are unchanged.")
     parser.add_argument("--min-cells", type=int, default=0, help="Absolute minimum number of cells in which a gene must be non-zero.")
     parser.add_argument("--min-gene-nonzero-fraction", type=float, default=0.0, help="Minimum fraction of all cells in which a gene must be non-zero.")
     parser.add_argument("--top-genes-by-detection", type=int, default=10_000, help="Keep the top N globally detected genes after filtering; 0 keeps all.")
@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    prepare_scifate2(dataset=args.dataset, work_dir=args.work_dir, output_dir=args.output_dir, h5ad_path=args.h5ad_path, activation_layer=args.activation_layer, new_layer=args.new_layer, min_cells=args.min_cells, min_gene_nonzero_fraction=args.min_gene_nonzero_fraction, top_genes_by_detection=args.top_genes_by_detection, force_download=args.force_download, force_process=args.force_process, delete_h5ad=args.delete_h5ad, clip_ratio=args.clip_ratio, timepoint_column=args.timepoint_column, gene_id_column=args.gene_id_column, compressed_npz=not args.uncompressed_npz, cell_annotations=args.cell_annotations, annotation_cell_id_column=args.annotation_cell_id_column, annotation_cell_type_column=args.annotation_cell_type_column, authors_cell_types=args.authors_cell_types, authors_counting_h5ad=args.authors_counting_h5ad, force_authors_cell_types=args.force_authors_cell_types, strict_authors_cell_types=not args.allow_authors_annotation_drift)
+    prepare_scifate2(dataset=args.dataset, work_dir=args.work_dir, output_dir=args.output_dir, h5ad_path=args.h5ad_path, activation_layer=args.activation_layer, new_layer=args.new_layer, min_cells=args.min_cells, min_gene_nonzero_fraction=args.min_gene_nonzero_fraction, top_genes_by_detection=args.top_genes_by_detection, force_download=args.force_download, force_process=args.force_process, delete_h5ad=args.delete_h5ad, clip_ratio=args.clip_ratio, timepoint_column=args.timepoint_column, gene_id_column=args.gene_id_column, compressed_npz=not args.uncompressed_npz, cell_annotations=args.cell_annotations, annotation_cell_id_column=args.annotation_cell_id_column, annotation_cell_type_column=args.annotation_cell_type_column, authors_cell_types=args.authors_cell_types, authors_counting_h5ad=args.authors_counting_h5ad, force_authors_cell_types=args.force_authors_cell_types, authors_chunk_size=args.authors_chunk_size)
 
 
 if __name__ == "__main__":
