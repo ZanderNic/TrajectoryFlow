@@ -11,13 +11,14 @@ from pathlib import Path
 
 # 3 party imports
 import pandas as pd
+from tqdm.auto import tqdm
 
 # package imports
 from trajectoryflow.data.store import ScifateStore
 from trajectoryflow.evaluation.default import make_default_evaluator
 from trajectoryflow.experiment.config import BenchmarkConfig, load_benchmark_config
 from trajectoryflow.experiment.evaluation import CallableEvaluationAdapter
-from trajectoryflow.experiment.models import ExperimentRegistry, NoChangeExperimentAdapter, VelvetExperimentAdapter
+from trajectoryflow.experiment.models import DualScaleExperimentAdapter, ExperimentRegistry, NoChangeExperimentAdapter, VelvetExperimentAdapter
 from trajectoryflow.experiment.runner import ExperimentRunner
 from trajectoryflow.experiment.runtime import system_info
 from trajectoryflow.experiment.split import resolve_split
@@ -76,7 +77,13 @@ def make_registry(config: BenchmarkConfig) -> ExperimentRegistry:
     if "velvet" in enabled:
         registry.register_model("velvet", VelvetExperimentAdapter())
 
-    known = {"no_change", "velvet"}
+    dual_scale_names = sorted(
+        name for name in enabled if name == "dual_scale" or name.startswith("dual_scale_")
+    )
+    for name in dual_scale_names:
+        registry.register_model(name, DualScaleExperimentAdapter())
+
+    known = {"no_change", "velvet", *dual_scale_names}
     unknown = sorted(enabled - known)
 
     if unknown:
@@ -93,13 +100,28 @@ def experiment_dir(config: BenchmarkConfig, model: str, split: str, seed: int) -
     return config.output_dir / model / split / f"seed_{seed}"
 
 
-def completed_result_matches(path: Path, split_fingerprint: str, resume_signature: str) -> bool:
+def completed_result_matches(
+    path: Path,
+    split_fingerprint: str,
+    resume_signature: str | None = None,
+) -> bool:
     try:
         result = json.loads((path / "result.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    matches = (
+        result.get("status") == "completed"
+        and result.get("split_fingerprint") == split_fingerprint
+    )
+    if not matches or resume_signature is None:
+        return matches
+
+    try:
         resume = json.loads((path / "resume.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return result.get("status") == "completed" and result.get("split_fingerprint") == split_fingerprint and resume.get("signature") == resume_signature
+    return resume.get("signature") == resume_signature
 
 
 def _json_hash(value) -> str:
@@ -341,49 +363,67 @@ def main() -> None:
     completed = 0
     skipped = 0
     failed = 0
+    enabled_models = [model for model in config.models if model.enabled]
+    total_experiments = len(enabled_models) * len(config.splits) * len(config.seeds)
+    benchmark_progress = tqdm(
+        total=total_experiments,
+        desc="Benchmark",
+        unit="experiment",
+        dynamic_ncols=True,
+        position=0,
+    )
 
-    for split_spec in config.splits:
-        for seed in config.seeds:
-            split = resolve_split(store=store, spec=split_spec, seed=seed)
+    def emit(message: str) -> None:
+        benchmark_progress.write(message)
 
-            for model in config.models:
-                if not model.enabled:
-                    continue
+    try:
+        for split_spec in config.splits:
+            for seed in config.seeds:
+                split = resolve_split(store=store, spec=split_spec, seed=seed)
 
-                run_dir = experiment_dir(config, model.name, split.name, seed)
-                label = f"{model.name} | {split.name} | seed={seed}"
+                for model in enabled_models:
+                    run_dir = experiment_dir(config, model.name, split.name, seed)
+                    label = f"{model.name} | {split.name} | seed={seed}"
+                    benchmark_progress.set_description_str(f"Benchmark | {label}")
 
-                signature = resume_signature(config, model, split, store)
-                if args.resume and completed_result_matches(run_dir, split.fingerprint, signature):
-                    print(f"[skip] {label}")
-                    skipped += 1
-                    continue
+                    signature = resume_signature(config, model, split, store)
+                    if args.resume and completed_result_matches(
+                        run_dir, split.fingerprint, signature
+                    ):
+                        emit(f"[skip] {label}")
+                        skipped += 1
+                        benchmark_progress.update(1)
+                        continue
 
-                print(f"[run ] {label}")
+                    emit(f"[run ] {label}")
 
-                try:
-                    result = runner.run(
-                        model_config=model,
-                        split=split,
-                        seed=seed,
-                    )
-                except Exception as error:
-                    failed += 1
-                    print(f"[fail] {label}: {type(error).__name__}: {error}")
+                    try:
+                        result = runner.run(
+                            model_config=model,
+                            split=split,
+                            seed=seed,
+                        )
+                    except Exception as error:
+                        failed += 1
+                        emit(f"[fail] {label}: {type(error).__name__}: {error}")
+                        benchmark_progress.update(1)
 
-                    if config.fail_fast:
-                        aggregate_outputs(config.output_dir)
-                        raise
+                        if config.fail_fast:
+                            aggregate_outputs(config.output_dir)
+                            raise
 
-                    continue
+                        continue
 
-                if result.status == "completed":
-                    save_resume_signature(run_dir, signature)
-                    completed += 1
-                    print(f"[done] {label}")
-                else:
-                    failed += 1
-                    print(f"[fail] {label}: {result.error}")
+                    if result.status == "completed":
+                        save_resume_signature(run_dir, signature)
+                        completed += 1
+                        emit(f"[done] {label}")
+                    else:
+                        failed += 1
+                        emit(f"[fail] {label}: {result.error}")
+                    benchmark_progress.update(1)
+    finally:
+        benchmark_progress.close()
 
     aggregate_outputs(config.output_dir)
 

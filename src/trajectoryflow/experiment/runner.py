@@ -29,6 +29,7 @@ from trajectoryflow.experiment.models import ExperimentRegistry
 from trajectoryflow.experiment.plotting import plot_velocity_alignment_histogram, plot_velocity_comparison
 from trajectoryflow.experiment.runtime import PhaseProfiler, parameter_stats, seed_everything, stable_seed, system_info
 from trajectoryflow.experiment.split import ResolvedSplit, VelocityTask, resolve_split
+from trajectoryflow.training.progress import TrainingProgressReporter
 
 
 def _jsonable(value):
@@ -223,14 +224,24 @@ class ExperimentRunner:
         experiment_id = f"{model_config.name}__{split.name}__seed_{seed}__{split.fingerprint}"
         result, error_to_raise, built = None, None, None
         prep_profiler = train_profiler = None
+        training_progress = TrainingProgressReporter(
+            output_dir=artifacts.root / "training",
+            label=f"{model_config.name} | {split.name} | seed={seed}",
+        )
 
         # Inner profilers own CUDA peak counters; the outer profiler tracks total wall/CPU/RSS only.
         with PhaseProfiler(self.device, profile_cuda_memory=False) as total_profiler:
             try:
+                training_progress.status("build", "constructing model and training data")
                 with PhaseProfiler(self.device) as prep_profiler:
                     built = adapter.build(config=model_config, data=data, device=self.device, seed=seed)
+                adapter.set_training_progress(built, training_progress)
+                training_progress.status("training")
                 with PhaseProfiler(self.device) as train_profiler:
                     training_summary = adapter.fit(built=built, config=self.config.training)
+                training_progress.close(status="completed")
+                training_summary = dict(training_summary)
+                training_summary["logs"] = training_progress.manifest()
 
                 result = ExperimentResult(experiment_id=experiment_id, model=model_config.name, split=split.name, split_fingerprint=split.fingerprint, seed=seed, status="running", fit_timepoints=split.fit_timepoints, training_cell_counts=data.training_cell_counts, parameters=parameter_stats(built.model), system=system_info(), training_data_prep=prep_profiler.stats, training=train_profiler.stats, training_summary=training_summary)
 
@@ -255,6 +266,10 @@ class ExperimentRunner:
                             result.velocity_tasks.append(self._evaluate_velocity_task(adapter, built, data, split, task, phase, seed, artifacts))
                 result.status = "completed"
             except Exception as error:
+                training_progress.close(
+                    status="failed",
+                    error=f"{type(error).__name__}: {error}",
+                )
                 if result is None:
                     result = ExperimentResult(experiment_id=experiment_id, model=model_config.name, split=split.name, split_fingerprint=split.fingerprint, seed=seed, status="failed", fit_timepoints=split.fit_timepoints, training_cell_counts=data.training_cell_counts, parameters=parameter_stats(built.model if built is not None else None), system=system_info(), training_data_prep=None if prep_profiler is None else prep_profiler.stats, training=None if train_profiler is None else train_profiler.stats)
                 else:
@@ -273,20 +288,26 @@ class ExperimentRunner:
             raise error_to_raise
         return result
 
-    def _predict(self, adapter, built, source, source_time: float, target_time: float, n_samples: int):
+    def _predict(self, adapter, built, context, source_time: float, target_time: float, n_samples: int):
         with torch.inference_mode():
-            return adapter.predict(built=built, source=source, source_time=source_time, target_time=target_time, n_samples=n_samples)
+            return adapter.predict_with_context(
+                built=built,
+                context=context,
+                source_time=source_time,
+                target_time=target_time,
+                n_samples=n_samples,
+            )
 
-    def _prediction_batches(self, adapter, built, source, source_time: float, target_time: float):
+    def _prediction_batches(self, adapter, built, context, source_time: float, target_time: float):
         remaining = self.config.evaluation.n_samples
         batch_size = min(self.config.evaluation.sample_batch_size, remaining)
         while remaining:
             current = min(batch_size, remaining)
-            yield self._predict(adapter, built, source, source_time, target_time, current)
+            yield self._predict(adapter, built, context, source_time, target_time, current)
             remaining -= current
 
-    def _discard_prediction_batches(self, adapter, built, source, source_time: float, target_time: float) -> None:
-        for prediction in self._prediction_batches(adapter, built, source, source_time, target_time):
+    def _discard_prediction_batches(self, adapter, built, context, source_time: float, target_time: float) -> None:
+        for prediction in self._prediction_batches(adapter, built, context, source_time, target_time):
             del prediction
 
     def _evaluate_task(self, adapter, built, data: ExperimentData, split: ResolvedSplit, task, phase: str, seed: int, artifacts: RunArtifacts) -> TaskResult:
@@ -295,7 +316,8 @@ class ExperimentRunner:
             source_time, target_time = task_data.source.time_hours, task_data.target.time_hours
             source_indices, target_indices = task_data.source.indices.copy(), task_data.target.indices.copy()
             n_source_cells, n_target_cells = len(task_data.source), len(task_data.target)
-            source, target = dense_expression(task_data.source, self.device), dense_expression(task_data.target, self.device)
+            source_context = adapter.prepare_prediction_context(task_data.source, self.device)
+            target = dense_expression(task_data.target, self.device)
             del task_data
             _clear_store_cache(self.store)
             gc.collect()
@@ -303,13 +325,13 @@ class ExperimentRunner:
 
         for run_id in range(self.config.evaluation.prediction_warmup_runs):
             self._seed_prediction(seed, split, phase, task.task_name, "warmup", run_id)
-            self._discard_prediction_batches(adapter, built, source, source_time, target_time)
+            self._discard_prediction_batches(adapter, built, source_context, source_time, target_time)
 
         prediction_runs = []
         for run_id in range(self.config.evaluation.prediction_timing_runs):
             self._seed_prediction(seed, split, phase, task.task_name, "timing", run_id)
             with PhaseProfiler(self.device) as profiler:
-                self._discard_prediction_batches(adapter, built, source, source_time, target_time)
+                self._discard_prediction_batches(adapter, built, source_context, source_time, target_time)
             prediction_runs.append(profiler.stats)
 
         self._seed_prediction(seed, split, phase, task.task_name, "evaluation")
@@ -317,7 +339,7 @@ class ExperimentRunner:
         with PhaseProfiler(self.device) as evaluation_profiler:
             transformed_target = transform_evaluation_space(target, self.config.evaluation.space.transform, self.config.evaluation.space.library_size)
             del target
-            for prediction in self._prediction_batches(adapter, built, source, source_time, target_time):
+            for prediction in self._prediction_batches(adapter, built, source_context, source_time, target_time):
                 for local_index in range(prediction.states.shape[0]):
                     state = prediction.states[local_index : local_index + 1]
                     if self.config.save_predictions:

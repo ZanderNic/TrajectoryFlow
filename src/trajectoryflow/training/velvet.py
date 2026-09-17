@@ -22,7 +22,7 @@ class VelvetTrainingHistory:
 
 
 class VelvetTrainer(BaseTrainer):
-    def __init__(self, data: VelvetData, neighbor_indices: np.ndarray | None = None, device: torch.device | str | None = None, train_sde: bool = True, verbose: bool = False):
+    def __init__(self, data: VelvetData, neighbor_indices: np.ndarray | None = None, device: torch.device | str | None = None, train_sde: bool = True, verbose: bool = False, progress=None):
         if not isinstance(train_sde, bool) or not isinstance(verbose, bool):
             raise ValueError("train_sde and verbose must be boolean.")
         self.data = data
@@ -32,6 +32,7 @@ class VelvetTrainer(BaseTrainer):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.history = VelvetTrainingHistory()
         self._rng = np.random.default_rng()
+        self.progress = progress
 
     def _log(self, message: str) -> None:
         if self.verbose:
@@ -74,7 +75,10 @@ class VelvetTrainer(BaseTrainer):
         n_cells = min(config.gamma_init_cells, self.data.n_cells)
         indices = self._rng.choice(self.data.n_cells, size=n_cells, replace=False)
         gamma = estimate_gamma_extreme_regression_sparse(total=self.data.total[indices], new=self.data.new[indices], labelling_time=config.labelling_time, quantile=config.gamma_extreme_quantile, ratio_eps=config.gamma_ratio_eps, default_gamma=config.gamma_default)
-        self._log(f"[velvet gamma] min={gamma.min().item():.6g} median={gamma.median().item():.6g} max={gamma.max().item():.6g}")
+        message = f"min={gamma.min().item():.6g} median={gamma.median().item():.6g} max={gamma.max().item():.6g}"
+        self._log(f"[velvet gamma] {message}")
+        if self.progress is not None:
+            self.progress.status("velvet/gamma_init", message)
         baseline.velvet.biophysics.set_gamma(gamma)
 
     def _latent_all(self, baseline: VelvetBaseline) -> torch.Tensor:
@@ -105,6 +109,9 @@ class VelvetTrainer(BaseTrainer):
             mean = self._weighted_mean(metrics)
             self.history.stage1.append(mean)
             self._log(f"[velvet stage 1] {epoch + 1:4d}/{config.stage1_epochs} loss={mean['loss']:.4f} vae={(mean['reconstruction'] + mean['kl']):.4f} velocity={mean['velocity']:.4f}")
+            if self.progress is not None:
+                self.progress.update("velvet/stage1", epoch + 1, mean)
+                self.progress.epoch("velvet/stage1", epoch + 1, mean)
 
     def _train_stage2(self, baseline: VelvetBaseline, all_z_cpu: torch.Tensor, neighbor_indices: np.ndarray) -> None:
         model, config = baseline.velvet, baseline.velvet.config
@@ -130,6 +137,9 @@ class VelvetTrainer(BaseTrainer):
             mean = self._weighted_mean(metrics)
             self.history.stage2.append(mean)
             self._log(f"[velvet stage 2] {epoch + 1:4d}/{config.stage2_epochs} loss={mean['loss']:.4f} velocity={mean['velocity']:.4f} neighbor={mean['neighborhood']:.4f}")
+            if self.progress is not None:
+                self.progress.update("velvet/stage2", epoch + 1, mean)
+                self.progress.epoch("velvet/stage2", epoch + 1, mean)
 
     def _train_sde(self, baseline: VelvetBaseline, all_z_cpu: torch.Tensor) -> None:
         sde, config = baseline.sde, baseline.sde.config
@@ -150,12 +160,20 @@ class VelvetTrainer(BaseTrainer):
             value = float(loss.detach())
             self.history.sde.append(value)
             self._log(f"[velvet SDE] {epoch + 1:4d}/{config.epochs} loss={value:.4f}")
+            if self.progress is not None:
+                metrics = {"loss": value}
+                self.progress.update("velvet/sde", epoch + 1, metrics)
+                self.progress.epoch("velvet/sde", epoch + 1, metrics)
 
     def _fit_seeded(self, model: VelvetBaseline) -> None:
         self._initialize_gamma(model)
         self._train_stage1(model)
+        if self.progress is not None:
+            self.progress.status("velvet/latent", "encoding all training cells")
         all_z_cpu = self._latent_all(model)
         if self.neighbor_indices is None:
+            if self.progress is not None:
+                self.progress.status("velvet/neighbors", "building training-cell neighbors")
             self.neighbor_indices = build_velvet_neighbors(data=self.data, n_neighbors=model.velvet.config.n_neighbors, seed=model.velvet.config.seed)
         expected_shape = (self.data.n_cells, model.velvet.config.n_neighbors)
         if self.neighbor_indices.shape != expected_shape:
@@ -169,6 +187,13 @@ class VelvetTrainer(BaseTrainer):
             raise TypeError("VelvetTrainer requires a VelvetBaseline.")
         seed = model.velvet.config.seed
         self.history = VelvetTrainingHistory()
+        if self.progress is not None:
+            config = model.velvet.config
+            sde_epochs = model.sde.config.epochs if self.train_sde else 0
+            self.progress.start(
+                total=config.stage1_epochs + config.stage2_epochs + sde_epochs,
+                unit="epoch",
+            )
         self._rng = np.random.default_rng(seed)
         model.velvet.to(self.device)
 

@@ -1,0 +1,245 @@
+data_root = "data/processed/scifate2"
+output_dir = "runs/dual_scale_ablation"
+seeds = [0]
+fail_fast = true
+save_checkpoints = true
+save_predictions = true
+
+[runtime]
+device = "auto"
+deterministic = true
+precision = "float32"
+store_cache_size = 0
+
+[evaluation]
+n_source_cells = 1000
+n_target_cells = 1000
+n_samples = 5
+sample_batch_size = 1
+prediction_warmup_runs = 0
+prediction_timing_runs = 1
+
+[evaluation.space]
+transform = "none"
+
+# 1) Free diffusion: no gene-space, past-direction, or kinetic-direction auxiliary loss.
+[[models]]
+name = "dual_scale_free"
+
+[models.model_params]
+latent_dim = 64
+kinetic_dim = 32
+state_hidden_dims = [512, 256]
+decoder_hidden_dims = [256, 512]
+kinetic_projection_dim = 96
+kinetic_hidden_dims = [256, 128]
+transition_type = "diffusion"
+transition_hidden_dims = [192, 192]
+diffusion_time_embedding_dim = 32
+diffusion_sample_steps = 8
+diffusion_cosine_offset = 0.008
+time_scale_hours = 2.0
+
+[models.trainer_params]
+local_batch_size = 128
+global_batch_size = 128
+labeling_time = 2.0
+learning_rate = 0.001
+weight_decay = 0.00001
+global_samples = 1
+distribution_space = "latent"
+sw_projections = 64
+gene_sw_projections = 16
+kinetic_direction_step_hours = 0.25
+alignment_start_epoch = 20
+detach_alignment_teacher = true
+
+[models.trainer_params.schedule]
+local_pretrain_epochs = 20
+global_pretrain_epochs = 0
+joint_epochs = 100
+local_steps_per_pretrain_epoch = 100
+global_steps_per_pretrain_epoch = 0
+local_steps_per_joint_cycle = 2
+global_steps_per_joint_cycle = 1
+joint_cycles_per_epoch = 100
+
+[models.trainer_params.loss_weights]
+reconstruction = 1.0
+new_rna = 1.0
+gamma_regularization = 0.001
+future_sliced_wasserstein = 1.0
+future_mmd = 0.1
+future_gene_sliced_wasserstein = 0.0
+past_direction_alignment = 0.0
+kinetic_direction_alignment = 0.0
+transition_regularization = 0.0
+
+# 2) Free diffusion + raw gene-space future SW.
+[[models]]
+name = "dual_scale_gene"
+
+[models.model_params]
+latent_dim = 64
+kinetic_dim = 32
+state_hidden_dims = [512, 256]
+decoder_hidden_dims = [256, 512]
+kinetic_projection_dim = 96
+kinetic_hidden_dims = [256, 128]
+transition_type = "diffusion"
+transition_hidden_dims = [192, 192]
+diffusion_time_embedding_dim = 32
+diffusion_sample_steps = 8
+diffusion_cosine_offset = 0.008
+time_scale_hours = 2.0
+
+[models.trainer_params]
+local_batch_size = 128
+global_batch_size = 128
+labeling_time = 2.0
+learning_rate = 0.001
+weight_decay = 0.00001
+global_samples = 1
+distribution_space = "latent"
+sw_projections = 64
+gene_sw_projections = 16
+kinetic_direction_step_hours = 0.25
+alignment_start_epoch = 20
+detach_alignment_teacher = true
+
+[models.trainer_params.schedule]
+local_pretrain_epochs = 20
+global_pretrain_epochs = 0
+joint_epochs = 100
+local_steps_per_pretrain_epoch = 100
+global_steps_per_pretrain_epoch = 0
+local_steps_per_joint_cycle = 2
+global_steps_per_joint_cycle = 1
+joint_cycles_per_epoch = 100
+
+[models.trainer_params.loss_weights]
+reconstruction = 1.0
+new_rna = 1.0
+gamma_regularization = 0.001
+future_sliced_wasserstein = 1.0
+future_mmd = 0.1
+future_gene_sliced_wasserstein = 0.01
+past_direction_alignment = 0.0
+kinetic_direction_alignment = 0.0
+transition_regularization = 0.0
+
+# 3) + past directional supervision from the previous observed population.
+[[models]]
+name = "dual_scale_gene_past"
+
+[models.model_params]
+latent_dim = 64
+kinetic_dim = 32
+state_hidden_dims = [512, 256]
+decoder_hidden_dims = [256, 512]
+kinetic_projection_dim = 96
+kinetic_hidden_dims = [256, 128]
+transition_type = "diffusion"
+transition_hidden_dims = [192, 192]
+diffusion_time_embedding_dim = 32
+diffusion_sample_steps = 8
+diffusion_cosine_offset = 0.008
+time_scale_hours = 2.0
+
+[models.trainer_params]
+local_batch_size = 128
+global_batch_size = 128
+labeling_time = 2.0
+learning_rate = 0.001
+weight_decay = 0.00001
+global_samples = 1
+distribution_space = "latent"
+sw_projections = 64
+gene_sw_projections = 16
+kinetic_direction_step_hours = 0.25
+alignment_start_epoch = 20
+detach_alignment_teacher = true
+
+[models.trainer_params.schedule]
+local_pretrain_epochs = 20
+global_pretrain_epochs = 0
+joint_epochs = 100
+local_steps_per_pretrain_epoch = 100
+global_steps_per_pretrain_epoch = 0
+local_steps_per_joint_cycle = 2
+global_steps_per_joint_cycle = 1
+joint_cycles_per_epoch = 100
+
+[models.trainer_params.loss_weights]
+reconstruction = 1.0
+new_rna = 1.0
+gamma_regularization = 0.001
+future_sliced_wasserstein = 1.0
+future_mmd = 0.1
+future_gene_sliced_wasserstein = 0.01
+past_direction_alignment = 0.1
+kinetic_direction_alignment = 0.0
+transition_regularization = 0.0
+
+# 4) + the desired local kinetic-direction prior on the predicted transition.
+[[models]]
+name = "dual_scale_direction"
+
+[models.model_params]
+latent_dim = 64
+kinetic_dim = 32
+state_hidden_dims = [512, 256]
+decoder_hidden_dims = [256, 512]
+kinetic_projection_dim = 96
+kinetic_hidden_dims = [256, 128]
+transition_type = "diffusion"
+transition_hidden_dims = [192, 192]
+diffusion_time_embedding_dim = 32
+diffusion_sample_steps = 8
+diffusion_cosine_offset = 0.008
+time_scale_hours = 2.0
+
+[models.trainer_params]
+local_batch_size = 128
+global_batch_size = 128
+labeling_time = 2.0
+learning_rate = 0.001
+weight_decay = 0.00001
+global_samples = 1
+distribution_space = "latent"
+sw_projections = 64
+gene_sw_projections = 16
+kinetic_direction_step_hours = 0.25
+alignment_start_epoch = 20
+detach_alignment_teacher = true
+
+[models.trainer_params.schedule]
+local_pretrain_epochs = 20
+global_pretrain_epochs = 0
+joint_epochs = 100
+local_steps_per_pretrain_epoch = 100
+global_steps_per_pretrain_epoch = 0
+local_steps_per_joint_cycle = 2
+global_steps_per_joint_cycle = 1
+joint_cycles_per_epoch = 100
+
+[models.trainer_params.loss_weights]
+reconstruction = 1.0
+new_rna = 1.0
+gamma_regularization = 0.001
+future_sliced_wasserstein = 1.0
+future_mmd = 0.1
+future_gene_sliced_wasserstein = 0.01
+past_direction_alignment = 0.1
+kinetic_direction_alignment = 0.1
+transition_regularization = 0.0
+
+[[splits]]
+name = "extrapolation_15h_to_20h"
+fit_timepoints = ["5h", "10h", "15h"]
+
+[[splits.test_tasks]]
+name = "15h_to_20h"
+source = "15h"
+target = "20h"
+kind = "extrapolation"

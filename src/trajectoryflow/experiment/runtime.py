@@ -61,9 +61,6 @@ class _MemorySampler:
         self.peak_bytes: int | None = None
 
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            raise RuntimeError("Memory sampler is already running.")
-        self._stop.clear()
         self.peak_bytes = _current_rss_bytes()
 
         def sample() -> None:
@@ -84,7 +81,6 @@ class _MemorySampler:
 
         if self._thread is not None:
             self._thread.join()
-            self._thread = None
 
 
 @dataclass(frozen=True)
@@ -105,19 +101,30 @@ class PhaseStats:
 
 class PhaseProfiler(AbstractContextManager):
 
-    def __init__(self, device: torch.device | str | None = None, profile_cuda_memory: bool = True):
+    def __init__(
+        self,
+        device: torch.device | str | None = None,
+        profile_cuda_memory: bool = True,
+    ):
         self.device = torch.device(device) if device is not None else None
-        self.profile_cuda_memory = profile_cuda_memory
+        self.profile_cuda_memory = bool(profile_cuda_memory)
         self.stats: PhaseStats | None = None
 
     def _cuda_enabled(self) -> bool:
-        return self.profile_cuda_memory and self.device is not None and self.device.type == "cuda" and torch.cuda.is_available()
+        return (
+            self.device is not None
+            and self.device.type == "cuda"
+            and torch.cuda.is_available()
+        )
 
     def __enter__(self):
         if self._cuda_enabled():
             torch.cuda.synchronize(self.device)
-            torch.cuda.reset_peak_memory_stats(self.device)
-            self.gpu_start = torch.cuda.memory_allocated(self.device)
+            if self.profile_cuda_memory:
+                torch.cuda.reset_peak_memory_stats(self.device)
+                self.gpu_start = torch.cuda.memory_allocated(self.device)
+            else:
+                self.gpu_start = None
         else:
             self.gpu_start = None
 
@@ -140,7 +147,7 @@ class PhaseProfiler(AbstractContextManager):
         rss_end = _current_rss_bytes()
         rss_peak = self.memory_sampler.peak_bytes
 
-        if self._cuda_enabled():
+        if self._cuda_enabled() and self.profile_cuda_memory:
             peak_allocated = torch.cuda.max_memory_allocated(self.device)
             peak_reserved = torch.cuda.max_memory_reserved(self.device)
             peak_delta = max(peak_allocated - (self.gpu_start or 0), 0)
