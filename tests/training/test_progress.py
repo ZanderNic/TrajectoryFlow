@@ -9,7 +9,7 @@ def test_training_progress_writes_live_and_persistent_metrics(tmp_path):
     reporter = TrainingProgressReporter(tmp_path / "training", "demo", enabled=False)
     reporter.status("build", "ready")
     reporter.start(total=2)
-    reporter.update("joint/local", epoch=1, metrics={"total": 2.0, "new_rna": 1.0})
+    reporter.update("joint/local", epoch=1, metrics={"total": 2.0, "local_kinetic": 1.0})
     reporter.update(
         "joint/global",
         epoch=1,

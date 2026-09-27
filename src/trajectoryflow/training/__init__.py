@@ -15,7 +15,6 @@ from trajectoryflow.training.dual_scale_data import (
     TotalPopulation,
     UnpairedGlobalPopulationLoader,
 )
-from trajectoryflow.training.progress import TrainingProgressReporter
 
 __all__ = [
     "DualScaleLossWeights",
@@ -30,6 +29,5 @@ __all__ = [
     "MixedBatchLoader",
     "SparseKineticPopulation",
     "TotalPopulation",
-    "TrainingProgressReporter",
     "UnpairedGlobalPopulationLoader",
 ]

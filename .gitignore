@@ -3,6 +3,8 @@ data/processed
 data/raw
 data/tmp
 
+.venv-velvet-reference
+
 # Runs
 runs/
 

@@ -6,21 +6,16 @@ from typing import Iterable
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import torch
 from sklearn.decomposition import PCA
 
-# package imports
 
+LOCAL_METRICS = (
+    "reconstruction",
+    "local_kinetic",
+)
 
-LOCAL_METRICS = ("reconstruction", "new_rna", "gamma_regularization")
 GLOBAL_METRICS = (
-    "past_direction_alignment",
-    "future_sliced_wasserstein",
-    "future_mmd",
-    "future_gene_sliced_wasserstein",
-    "kinetic_direction_alignment",
-    "transition_regularization",
-    "gamma_regularization",
+    "population_sliced_wasserstein",
 )
 
 
@@ -140,24 +135,12 @@ def plot_transition_uncertainty(
     cells: pd.DataFrame,
     path: str | Path | None = None,
 ):
+    """Plot stochastic residual magnitude across repeated noise samples."""
     fig, ax = plt.subplots(figsize=(8, 4.8))
     ax.hist(cells["transition_mean_norm"], bins=40, alpha=0.55, label="||E[Δz]||")
     ax.hist(cells["transition_std_norm"], bins=40, alpha=0.55, label="||SD[Δz]||")
-    ax.set(title="Latent transition magnitude and uncertainty", xlabel="Latent norm", ylabel="Cells")
+    ax.set(title="Stochastic latent transition", xlabel="Latent norm", ylabel="Cells")
     ax.legend(frameon=False)
-    return _save(fig, path)
-
-
-def plot_alignment_cosine(
-    cells: pd.DataFrame,
-    path: str | Path | None = None,
-):
-    if "alignment_cosine" not in cells or cells["alignment_cosine"].dropna().empty:
-        return None
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.hist(cells["alignment_cosine"].dropna(), bins=40)
-    ax.axvline(0, linestyle="--", linewidth=1)
-    ax.set(title="Kinetic direction / transition alignment", xlabel="Cosine similarity", ylabel="Cells", xlim=(-1, 1))
     return _save(fig, path)
 
 
@@ -180,24 +163,6 @@ def plot_latent_transition(
     ax.scatter(source_2d[:, 0], source_2d[:, 1], s=10, alpha=0.35, label="source")
     ax.scatter(target_2d[:, 0], target_2d[:, 1], s=10, alpha=0.35, label="real target")
     ax.scatter(predicted_2d[:, 0], predicted_2d[:, 1], s=10, alpha=0.35, label="predicted target")
-    ax.set(title=title, xlabel="PCA 1", ylabel="PCA 2")
-    ax.legend(frameon=False)
-    return _save(fig, path)
-
-
-def plot_past_reconstruction(
-    real_past_latent: np.ndarray,
-    reconstructed_past_latent: np.ndarray,
-    path: str | Path | None = None,
-    title: str = "Past-population reconstruction",
-):
-    real = np.asarray(real_past_latent)
-    reconstructed = np.asarray(reconstructed_past_latent)
-    pca = PCA(n_components=2, random_state=0).fit(real)
-    real_2d, reconstructed_2d = pca.transform(real), pca.transform(reconstructed)
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.scatter(real_2d[:, 0], real_2d[:, 1], s=10, alpha=0.4, label="real past")
-    ax.scatter(reconstructed_2d[:, 0], reconstructed_2d[:, 1], s=10, alpha=0.4, label="reconstructed past")
     ax.set(title=title, xlabel="PCA 1", ylabel="PCA 2")
     ax.legend(frameon=False)
     return _save(fig, path)

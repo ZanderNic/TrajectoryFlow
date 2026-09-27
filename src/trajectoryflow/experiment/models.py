@@ -15,16 +15,12 @@ from trajectoryflow.experiment.runtime import stable_seed
 from trajectoryflow.experiment.split import timepoint_hours
 
 
-
-
 @dataclass
 class PredictionContext:
-    """Source-cell modalities available to a model during forecast inference."""
+    """Source-cell modalities available during forecast inference."""
 
     total: torch.Tensor
-    new: torch.Tensor | None = None
     ntr: torch.Tensor | None = None
-    old: torch.Tensor | None = None
 
 
 @dataclass
@@ -326,7 +322,7 @@ class VelvetExperimentAdapter(ExperimentModelAdapter):
 
 
 class DualScaleExperimentAdapter(ExperimentModelAdapter):
-    """Benchmark bridge for the dual-scale kinetic transition model."""
+    """Benchmark bridge for the dual-scale stochastic residual transition model."""
 
     @staticmethod
     def _trainer_configuration(params: dict[str, Any]):
@@ -337,25 +333,72 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
         )
 
         params = dict(params)
-        loader = {
-            "local_batch_size": int(params.pop("local_batch_size", 128)),
-            "global_batch_size": int(params.pop("global_batch_size", 128)),
-            "labeling_time": float(params.pop("labeling_time", 2.0)),
-            "global_transitions": params.pop("global_transitions", None),
-        }
-        if loader["local_batch_size"] < 1 or loader["global_batch_size"] < 1:
-            raise ValueError("dual_scale batch sizes must be >= 1.")
-        if loader["labeling_time"] <= 0:
-            raise ValueError("dual_scale labeling_time must be positive.")
 
-        schedule = replace(DualScaleTrainingSchedule(), **dict(params.pop("schedule", {})))
-        loss_weights = replace(DualScaleLossWeights(), **dict(params.pop("loss_weights", {})))
+        loader = {
+            "local_batch_size": int(
+                params.pop(
+                    "local_batch_size",
+                    128,
+                )
+            ),
+            "global_batch_size": int(
+                params.pop(
+                    "global_batch_size",
+                    128,
+                )
+            ),
+            "labeling_time": float(
+                params.pop(
+                    "labeling_time",
+                    2.0,
+                )
+            ),
+            "global_transitions": params.pop(
+                "global_transitions",
+                None,
+            ),
+        }
+
+        if (
+            loader["local_batch_size"] < 1
+            or loader["global_batch_size"] < 1
+        ):
+            raise ValueError(
+                "dual_scale batch sizes must be >= 1."
+            )
+
+        if loader["labeling_time"] <= 0:
+            raise ValueError(
+                "dual_scale labeling_time must be positive."
+            )
+
+        schedule = replace(
+            DualScaleTrainingSchedule(),
+            **dict(
+                params.pop(
+                    "schedule",
+                    {},
+                )
+            ),
+        )
+
+        loss_weights = replace(
+            DualScaleLossWeights(),
+            **dict(
+                params.pop(
+                    "loss_weights",
+                    {},
+                )
+            ),
+        )
+
         trainer_config = replace(
             DualScaleTrainerConfig(),
             schedule=schedule,
             loss_weights=loss_weights,
             **params,
         )
+
         return trainer_config, loader
 
     @staticmethod
@@ -363,44 +406,112 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
         data: ExperimentData,
         configured,
     ) -> tuple[tuple[str, str], ...]:
-        allowed = set(data.training_timepoints)
+        """Resolve population transitions visible during training.
+
+        By default, consecutive training timepoints are used:
+            5h -> 10h
+            10h -> 15h
+            ...
+
+        Source and target populations remain unpaired at cell level.
+        """
+
+        allowed = set(
+            data.training_timepoints
+        )
+
         if configured is None:
-            ordered = sorted(data.training_timepoints, key=timepoint_hours)
-            return tuple(zip(ordered[:-1], ordered[1:]))
+            ordered = sorted(
+                data.training_timepoints,
+                key=timepoint_hours,
+            )
+
+            return tuple(
+                zip(
+                    ordered[:-1],
+                    ordered[1:],
+                )
+            )
 
         pairs = []
+
         for pair in configured:
-            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                raise ValueError("global_transitions must contain [source, target] pairs.")
-            source, target = str(pair[0]), str(pair[1])
-            if source not in allowed or target not in allowed:
+            if (
+                not isinstance(
+                    pair,
+                    (list, tuple),
+                )
+                or len(pair) != 2
+            ):
+                raise ValueError(
+                    "global_transitions must contain [source, target] pairs."
+                )
+
+            source, target = (
+                str(pair[0]),
+                str(pair[1]),
+            )
+
+            if (
+                source not in allowed
+                or target not in allowed
+            ):
                 raise ValueError(
                     "dual_scale global transitions may only use fit_timepoints; "
-                    f"got {source!r}->{target!r}, allowed={sorted(allowed)}."
+                    f"got {source!r}->{target!r}, "
+                    f"allowed={sorted(allowed)}."
                 )
-            if timepoint_hours(target) <= timepoint_hours(source):
-                raise ValueError("dual_scale global transition targets must be later than sources.")
-            pairs.append((source, target))
+
+            if (
+                timepoint_hours(target)
+                <= timepoint_hours(source)
+            ):
+                raise ValueError(
+                    "dual_scale global transition targets must be later than sources."
+                )
+
+            pairs.append(
+                (
+                    source,
+                    target,
+                )
+            )
+
         return tuple(pairs)
 
     @staticmethod
-    def _steps_per_loader(schedule, kind: str) -> int:
+    def _steps_per_loader(
+        schedule,
+        kind: str,
+    ) -> int:
         if kind == "local":
             return max(
                 1,
                 schedule.local_steps_per_pretrain_epoch,
-                schedule.local_steps_per_joint_cycle * schedule.joint_cycles_per_epoch,
+                (
+                    schedule.local_steps_per_joint_cycle
+                    * schedule.joint_cycles_per_epoch
+                ),
             )
+
         return max(
             1,
             schedule.global_steps_per_pretrain_epoch,
-            schedule.global_steps_per_joint_cycle * schedule.joint_cycles_per_epoch,
+            (
+                schedule.global_steps_per_joint_cycle
+                * schedule.joint_cycles_per_epoch
+            ),
         )
 
     @staticmethod
-    def _requires_global(schedule) -> bool:
+    def _requires_global(
+        schedule,
+    ) -> bool:
         return bool(
-            (schedule.global_pretrain_epochs and schedule.global_steps_per_pretrain_epoch)
+            (
+                schedule.global_pretrain_epochs
+                and schedule.global_steps_per_pretrain_epoch
+            )
             or (
                 schedule.joint_epochs
                 and schedule.global_steps_per_joint_cycle
@@ -415,8 +526,13 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
         device: torch.device,
         seed: int,
     ) -> BuiltExperimentModel:
-        from trajectoryflow.models.dual_scale import DualScaleModelConfig, build_default_dual_scale_model
-        from trajectoryflow.training.dual_scale import DualScaleTrainer
+        from trajectoryflow.models.dual_scale import (
+            DualScaleModelConfig,
+            build_default_dual_scale_model,
+        )
+        from trajectoryflow.training.dual_scale import (
+            DualScaleTrainer,
+        )
         from trajectoryflow.training.dual_scale_data import (
             LocalPopulationLoader,
             MixedBatchLoader,
@@ -424,84 +540,239 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
             UnpairedGlobalPopulationLoader,
         )
 
-        model_config = replace(DualScaleModelConfig(), **dict(config.model_params))
-        model = build_default_dual_scale_model(data.n_genes, model_config)
-        trainer_config, loader_config = self._trainer_configuration(config.trainer_params)
-        labeling_time = loader_config["labeling_time"]
+        # The model config contains only the stochastic residual transition.
+        # Obsolete transition keys therefore fail immediately instead of being
+        # silently ignored.
+        model_config = replace(
+            DualScaleModelConfig(),
+            **dict(
+                config.model_params
+            ),
+        )
 
+        model = build_default_dual_scale_model(
+            data.n_genes,
+            model_config,
+        )
+
+        trainer_config, loader_config = (
+            self._trainer_configuration(
+                config.trainer_params
+            )
+        )
+
+        labeling_time = (
+            loader_config[
+                "labeling_time"
+            ]
+        )
+
+        # Keep the snapshots sparse. Only sampled rows are densified by the
+        # population loaders.
         populations = {}
+
         for timepoint in data.training_timepoints:
-            snapshot = data.training_snapshot(timepoint)
-            populations[timepoint] = SparseKineticPopulation(
-                total=snapshot.expression.astype("float32", copy=False),
-                new=snapshot.new.astype("float32", copy=False),
-                ntr=snapshot.ntr.astype("float32", copy=False),
-                labeling_time=labeling_time,
-            )
-            data.unload(timepoint)
-
-        local_steps = self._steps_per_loader(trainer_config.schedule, "local")
-        local_loaders = tuple(
-            LocalPopulationLoader(
-                population=population,
-                batch_size=loader_config["local_batch_size"],
-                seed=stable_seed(seed, "dual_scale", "local", timepoint),
-            )
-            for timepoint, population in populations.items()
-        )
-        local_loader = MixedBatchLoader(
-            loaders=local_loaders,
-            steps_per_epoch=local_steps,
-            weights=tuple(float(len(populations[timepoint])) for timepoint in populations),
-            seed=stable_seed(seed, "dual_scale", "local_mix"),
-        )
-
-        pairs = self._fit_timepoint_pairs(data, loader_config["global_transitions"])
-        global_loaders = []
-        past_constraints = []
-        global_steps = self._steps_per_loader(trainer_config.schedule, "global")
-        ordered_training = sorted(populations, key=timepoint_hours)
-        for source_timepoint, target_timepoint in pairs:
-            source_hours = timepoint_hours(source_timepoint)
-            earlier = [tp for tp in ordered_training if timepoint_hours(tp) < source_hours]
-            past_timepoint = earlier[-1] if earlier else None
-            past_delta_time = (
-                None
-                if past_timepoint is None
-                else source_hours - timepoint_hours(past_timepoint)
-            )
-            if past_timepoint is not None:
-                past_constraints.append((past_timepoint, source_timepoint))
-            global_loaders.append(
-                UnpairedGlobalPopulationLoader(
-                    source=populations[source_timepoint],
-                    future_target_total=populations[target_timepoint].total,
-                    past_source=None if past_timepoint is None else populations[past_timepoint],
-                    past_delta_time=past_delta_time,
-                    delta_time=timepoint_hours(target_timepoint) - source_hours,
-                    batch_size=loader_config["global_batch_size"],
-                    steps_per_epoch=global_steps,
-                    seed=stable_seed(seed, "dual_scale", "global", source_timepoint, target_timepoint),
+            snapshot = (
+                data.training_snapshot(
+                    timepoint
                 )
             )
 
-        if not global_loaders and self._requires_global(trainer_config.schedule):
-            raise ValueError(
-                "dual_scale training schedule requests global steps, but there are no valid "
-                "fit-timepoint transitions. Provide at least two fit_timepoints or set all global steps to 0."
+            populations[
+                timepoint
+            ] = SparseKineticPopulation(
+                total=snapshot.expression.astype(
+                    "float32",
+                    copy=False,
+                ),
+                new=snapshot.new.astype(
+                    "float32",
+                    copy=False,
+                ),
+                ntr=snapshot.ntr.astype(
+                    "float32",
+                    copy=False,
+                ),
+                labeling_time=labeling_time,
             )
+
+            data.unload(
+                timepoint
+            )
+
+        # ------------------------------------------------------------
+        # Local batches
+        #
+        # Each measured cell keeps its within-cell total/new/NTR pairing.
+        # These batches supervise reconstruction and the kinetic objective.
+        # ------------------------------------------------------------
+
+        local_steps = (
+            self._steps_per_loader(
+                trainer_config.schedule,
+                "local",
+            )
+        )
+
+        local_loaders = tuple(
+            LocalPopulationLoader(
+                population=population,
+                batch_size=loader_config[
+                    "local_batch_size"
+                ],
+                seed=stable_seed(
+                    seed,
+                    "dual_scale",
+                    "local",
+                    timepoint,
+                ),
+            )
+            for timepoint, population
+            in populations.items()
+        )
+
+        local_loader = MixedBatchLoader(
+            loaders=local_loaders,
+            steps_per_epoch=local_steps,
+            weights=tuple(
+                float(
+                    len(
+                        populations[
+                            timepoint
+                        ]
+                    )
+                )
+                for timepoint
+                in populations
+            ),
+            seed=stable_seed(
+                seed,
+                "dual_scale",
+                "local_mix",
+            ),
+        )
+
+        # ------------------------------------------------------------
+        # Global batches
+        #
+        # Source and target cells are sampled independently.
+        #
+        # Each configured transition contributes exactly one population-level
+        # objective:
+        #
+        #     source population at t
+        #         -> stochastic residual generator
+        #         -> generated population at t + dt
+        #
+        # compared with the observed target population using Sliced-Wasserstein.
+        #
+        # No extra "past" constraint is inserted automatically here. Consecutive
+        # transitions already appear independently in `pairs`, so adding a past
+        # constraint would duplicate earlier transitions and change their weight.
+        # ------------------------------------------------------------
+
+        pairs = self._fit_timepoint_pairs(
+            data,
+            loader_config[
+                "global_transitions"
+            ],
+        )
+
+        global_steps = (
+            self._steps_per_loader(
+                trainer_config.schedule,
+                "global",
+            )
+        )
+
+        global_loaders = []
+
+        for (
+            source_timepoint,
+            target_timepoint,
+        ) in pairs:
+            source_hours = (
+                timepoint_hours(
+                    source_timepoint
+                )
+            )
+
+            target_hours = (
+                timepoint_hours(
+                    target_timepoint
+                )
+            )
+
+            global_loaders.append(
+                UnpairedGlobalPopulationLoader(
+                    source=populations[
+                        source_timepoint
+                    ],
+                    future_target_total=(
+                        populations[
+                            target_timepoint
+                        ].total
+                    ),
+                    delta_time=(
+                        target_hours
+                        - source_hours
+                    ),
+                    batch_size=loader_config[
+                        "global_batch_size"
+                    ],
+                    steps_per_epoch=global_steps,
+                    seed=stable_seed(
+                        seed,
+                        "dual_scale",
+                        "global",
+                        source_timepoint,
+                        target_timepoint,
+                    ),
+                )
+            )
+
+        if (
+            not global_loaders
+            and self._requires_global(
+                trainer_config.schedule
+            )
+        ):
+            raise ValueError(
+                "dual_scale training schedule requests global steps, "
+                "but there are no valid fit-timepoint transitions. "
+                "Provide at least two fit_timepoints or set all global steps to 0."
+            )
+
         global_loader = (
             MixedBatchLoader(
-                loaders=tuple(global_loaders),
+                loaders=tuple(
+                    global_loaders
+                ),
                 steps_per_epoch=global_steps,
-                seed=stable_seed(seed, "dual_scale", "global_mix"),
+                seed=stable_seed(
+                    seed,
+                    "dual_scale",
+                    "global_mix",
+                ),
             )
             if global_loaders
             else ()
         )
 
-        trainer = DualScaleTrainer(model=model, device=device, config=trainer_config)
-        bundle = DualScaleTrainingBundle(trainer=trainer, local_loader=local_loader, global_loader=global_loader)
+        trainer = DualScaleTrainer(
+            model=model,
+            device=device,
+            config=trainer_config,
+        )
+
+        bundle = (
+            DualScaleTrainingBundle(
+                trainer=trainer,
+                local_loader=local_loader,
+                global_loader=global_loader,
+            )
+        )
+
         return BuiltExperimentModel(
             model=model,
             trainer=bundle,
@@ -510,7 +781,13 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
                 "model_name": config.name,
                 "labeling_time": labeling_time,
                 "training_transitions": pairs,
-                "past_training_constraints": tuple(past_constraints),
+                "transition": model.transition_name,
+                "uses_kinetic_context": bool(
+                    model_config.use_kinetic_encoder
+                ),
+                "time_scale_hours": (
+                    model_config.time_scale_hours
+                ),
             },
         )
 
@@ -521,22 +798,47 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
     ) -> dict[str, Any]:
         if config.budget.limited:
             raise NotImplementedError(
-                "DualScaleTrainer uses its explicit local/global schedule and is not yet wired to the generic training budget."
+                "DualScaleTrainer uses its explicit local/global schedule "
+                "and is not yet wired to the generic training budget."
             )
-        if config.early_stopping is not None:
-            raise NotImplementedError("DualScaleTrainer does not implement generic early stopping yet.")
-        if not isinstance(built.trainer, DualScaleTrainingBundle):
-            raise TypeError("DualScaleExperimentAdapter expected a DualScaleTrainingBundle.")
 
-        history = built.trainer.trainer.fit(
-            local_loader=built.trainer.local_loader,
-            global_loader=built.trainer.global_loader,
+        if config.early_stopping is not None:
+            raise NotImplementedError(
+                "DualScaleTrainer does not implement generic early stopping yet."
+            )
+
+        if not isinstance(
+            built.trainer,
+            DualScaleTrainingBundle,
+        ):
+            raise TypeError(
+                "DualScaleExperimentAdapter expected a DualScaleTrainingBundle."
+            )
+
+        history = (
+            built.trainer.trainer.fit(
+                local_loader=(
+                    built.trainer.local_loader
+                ),
+                global_loader=(
+                    built.trainer.global_loader
+                ),
+            )
         )
+
         return {
-            "epochs": len(history.epochs),
-            "local_steps": len(history.local),
-            "global_steps": len(history.global_),
-            "stop_reason": "configured_training_complete",
+            "epochs": len(
+                history.epochs
+            ),
+            "local_steps": len(
+                history.local
+            ),
+            "global_steps": len(
+                history.global_
+            ),
+            "stop_reason": (
+                "configured_training_complete"
+            ),
         }
 
     def prepare_prediction_context(
@@ -544,10 +846,23 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
         selection: SnapshotSelection,
         device: torch.device,
     ) -> PredictionContext:
-        total = torch.from_numpy(selection.expression.toarray()).float().to(device)
-        new = torch.from_numpy(selection.new.toarray()).float().to(device)
-        ntr = torch.from_numpy(selection.ntr.toarray()).float().to(device)
-        return PredictionContext(total=total, new=new, ntr=ntr)
+        # Prediction needs total RNA and NTR only.
+        total = torch.from_numpy(
+            selection.expression.toarray()
+        ).float().to(
+            device
+        )
+
+        ntr = torch.from_numpy(
+            selection.ntr.toarray()
+        ).float().to(
+            device
+        )
+
+        return PredictionContext(
+            total=total,
+            ntr=ntr,
+        )
 
     def predict_with_context(
         self,
@@ -557,33 +872,58 @@ class DualScaleExperimentAdapter(ExperimentModelAdapter):
         target_time: float,
         n_samples: int,
     ):
-        from trajectoryflow.models.base import TrajectoryPrediction
-
-        if context.new is None or context.ntr is None:
-            raise ValueError("dual_scale prediction requires source total, new RNA and NTR.")
-        if target_time <= source_time:
-            raise ValueError("target_time must be later than source_time.")
-        old = (context.total - context.new).clamp_min(0) if context.old is None else context.old
-        output = built.model.forward_global(
-            total=context.total,
-            old=old,
-            new=context.new,
-            ntr=context.ntr,
-            delta_time=target_time - source_time,
-            labeling_time=float(built.metadata.get("labeling_time", built.model.time_scale_hours)),
-            n_samples=n_samples,
+        from trajectoryflow.models.base import (
+            TrajectoryPrediction,
         )
+
+        if context.ntr is None:
+            raise ValueError(
+                "dual_scale prediction requires source total RNA and NTR."
+            )
+
+        if target_time <= source_time:
+            raise ValueError(
+                "target_time must be later than source_time."
+            )
+
+        output = (
+            built.model.forward_global(
+                total=context.total,
+                ntr=context.ntr,
+                delta_time=(
+                    target_time
+                    - source_time
+                ),
+                n_samples=n_samples,
+            )
+        )
+
         return TrajectoryPrediction(
             states=output.future_total,
             source_time=source_time,
             target_time=target_time,
             metadata={
-                "model": str(built.metadata.get("model_name", "dual_scale")),
+                "model": str(
+                    built.metadata.get(
+                        "model_name",
+                        "dual_scale",
+                    )
+                ),
                 "stochastic": True,
-                "uses_kinetic_context": True,
-                "transition": built.model.transition_name,
+                "uses_kinetic_context": bool(
+                    built.metadata.get(
+                        "uses_kinetic_context",
+                        True,
+                    )
+                ),
+                "transition": (
+                    built.model.transition_name
+                ),
             },
         )
 
-    def release_training_resources(self, built: BuiltExperimentModel) -> None:
+    def release_training_resources(
+        self,
+        built: BuiltExperimentModel,
+    ) -> None:
         built.trainer = None

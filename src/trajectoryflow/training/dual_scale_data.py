@@ -26,16 +26,14 @@ class KineticPopulationLike(Protocol):
 class KineticPopulation:
     total: torch.Tensor
     new: torch.Tensor
-    old: torch.Tensor | None = None
     ntr: torch.Tensor | None = None
     labeling_time: float = 2.0
 
     def __post_init__(self) -> None:
         if self.total.ndim != 2 or self.new.shape != self.total.shape:
             raise ValueError("total and new must have identical [n_cells, n_genes] shape.")
-        for name, value in (("old", self.old), ("ntr", self.ntr)):
-            if value is not None and value.shape != self.total.shape:
-                raise ValueError(f"{name} must match total shape.")
+        if self.ntr is not None and self.ntr.shape != self.total.shape:
+            raise ValueError("ntr must match total shape.")
 
     def __len__(self) -> int:
         return self.total.shape[0]
@@ -48,7 +46,6 @@ class KineticPopulation:
         return LocalBatch(
             total=self.total[indices],
             new=self.new[indices],
-            old=None if self.old is None else self.old[indices],
             ntr=None if self.ntr is None else self.ntr[indices],
             labeling_time=self.labeling_time,
         )
@@ -56,20 +53,18 @@ class KineticPopulation:
 
 @dataclass(frozen=True)
 class SparseKineticPopulation:
-    """CSR-backed population; only selected rows are densified."""
+    """CSR-backed population; only sampled rows are densified."""
 
     total: sparse.csr_matrix
     new: sparse.csr_matrix
-    old: sparse.csr_matrix | None = None
     ntr: sparse.csr_matrix | None = None
     labeling_time: float = 2.0
 
     def __post_init__(self) -> None:
         if self.total.shape != self.new.shape:
             raise ValueError("total and new must have identical [n_cells, n_genes] shape.")
-        for name, value in (("old", self.old), ("ntr", self.ntr)):
-            if value is not None and value.shape != self.total.shape:
-                raise ValueError(f"{name} must match total shape.")
+        if self.ntr is not None and self.ntr.shape != self.total.shape:
+            raise ValueError("ntr must match total shape.")
 
     def __len__(self) -> int:
         return self.total.shape[0]
@@ -80,14 +75,15 @@ class SparseKineticPopulation:
 
     @staticmethod
     def _dense(matrix: sparse.csr_matrix, indices: np.ndarray) -> torch.Tensor:
-        return torch.from_numpy(matrix[indices].toarray().astype(np.float32, copy=False))
+        return torch.from_numpy(
+            matrix[indices].toarray().astype(np.float32, copy=False)
+        )
 
     def take(self, indices: torch.Tensor) -> LocalBatch:
         rows = indices.detach().cpu().numpy()
         return LocalBatch(
             total=self._dense(self.total, rows),
             new=self._dense(self.new, rows),
-            old=None if self.old is None else self._dense(self.old, rows),
             ntr=None if self.ntr is None else self._dense(self.ntr, rows),
             labeling_time=self.labeling_time,
         )
@@ -112,11 +108,13 @@ class TotalPopulation:
         if isinstance(self.total, torch.Tensor):
             return self.total[indices]
         rows = indices.detach().cpu().numpy()
-        return torch.from_numpy(self.total[rows].toarray().astype(np.float32, copy=False))
+        return torch.from_numpy(
+            self.total[rows].toarray().astype(np.float32, copy=False)
+        )
 
 
 class LocalPopulationLoader:
-    """Simple shuffled local batches with exact within-cell old/new pairing."""
+    """Shuffled batches preserving within-cell total/new/NTR measurements."""
 
     def __init__(
         self,
@@ -125,7 +123,10 @@ class LocalPopulationLoader:
         shuffle: bool = True,
         seed: int = 0,
     ):
-        self.population, self.batch_size, self.shuffle, self.seed = population, batch_size, shuffle, seed
+        self.population = population
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
         self._epoch = 0
 
     def __len__(self) -> int:
@@ -134,17 +135,21 @@ class LocalPopulationLoader:
     def __iter__(self):
         generator = torch.Generator().manual_seed(self.seed + self._epoch)
         self._epoch += 1
-        indices = torch.randperm(len(self.population), generator=generator) if self.shuffle else torch.arange(len(self.population))
+        indices = (
+            torch.randperm(len(self.population), generator=generator)
+            if self.shuffle
+            else torch.arange(len(self.population))
+        )
         for start in range(0, len(indices), self.batch_size):
             yield self.population.take(indices[start : start + self.batch_size])
 
 
 class UnpairedGlobalPopulationLoader:
-    """
-    Independently sample source, future-target and optional past-target cells.
+    """Independently sample source cells and future-target cells.
 
-    No source-target lineage correspondence is introduced by this loader. Dense
-    torch tensors and sparse CSR target populations are both supported.
+    No source-target lineage correspondence is introduced. The source batch
+    provides total RNA and NTR to the stochastic transition model, while target
+    cells are sampled independently for the population-level SW objective.
     """
 
     def __init__(
@@ -154,27 +159,22 @@ class UnpairedGlobalPopulationLoader:
         delta_time: float,
         batch_size: int,
         steps_per_epoch: int,
-        past_target_total: torch.Tensor | sparse.csr_matrix | TotalPopulation | None = None,
-        past_source: KineticPopulationLike | None = None,
-        past_delta_time: float | None = None,
         seed: int = 0,
     ):
         self.source = source
-        self.future_target = future_target_total if isinstance(future_target_total, TotalPopulation) else TotalPopulation(future_target_total)
-        self.past_target = None if past_target_total is None else (
-            past_target_total if isinstance(past_target_total, TotalPopulation) else TotalPopulation(past_target_total)
+        self.future_target = (
+            future_target_total
+            if isinstance(future_target_total, TotalPopulation)
+            else TotalPopulation(future_target_total)
         )
-        self.past_source = past_source
-        self.past_delta_time = past_delta_time
         if self.future_target.n_genes != source.n_genes:
             raise ValueError("future target gene count must match the source population.")
-        if self.past_target is not None and self.past_target.n_genes != source.n_genes:
-            raise ValueError("past target gene count must match the source population.")
-        if self.past_source is not None and self.past_source.n_genes != source.n_genes:
-            raise ValueError("past source gene count must match the source population.")
-        if self.past_source is not None and (self.past_delta_time is None or self.past_delta_time <= 0):
-            raise ValueError("past_delta_time must be positive when past_source is provided.")
-        self.delta_time = delta_time
+        if delta_time <= 0:
+            raise ValueError("delta_time must be positive.")
+        if batch_size < 1 or steps_per_epoch < 1:
+            raise ValueError("batch_size and steps_per_epoch must be >= 1.")
+
+        self.delta_time = float(delta_time)
         self.batch_size = batch_size
         self.steps_per_epoch = steps_per_epoch
         self.seed = seed
@@ -184,7 +184,11 @@ class UnpairedGlobalPopulationLoader:
         return self.steps_per_epoch
 
     @staticmethod
-    def _sample_indices(n: int, batch_size: int, generator: torch.Generator) -> torch.Tensor:
+    def _sample_indices(
+        n: int,
+        batch_size: int,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
         if n >= batch_size:
             return torch.randperm(n, generator=generator)[:batch_size]
         return torch.randint(n, (batch_size,), generator=generator)
@@ -192,34 +196,32 @@ class UnpairedGlobalPopulationLoader:
     def __iter__(self):
         generator = torch.Generator().manual_seed(self.seed + self._epoch)
         self._epoch += 1
+
         for _ in range(self.steps_per_epoch):
-            source_indices = self._sample_indices(len(self.source), self.batch_size, generator)
-            future_indices = self._sample_indices(len(self.future_target), self.batch_size, generator)
-            past = None
-            if self.past_target is not None:
-                past_indices = self._sample_indices(len(self.past_target), self.batch_size, generator)
-                past = self.past_target.take(past_indices)
-            past_source_batch = None
-            if self.past_source is not None:
-                past_source_indices = self._sample_indices(len(self.past_source), self.batch_size, generator)
-                past_source_batch = self.past_source.take(past_source_indices)
-            local = self.source.take(source_indices)
+            source_indices = self._sample_indices(
+                len(self.source),
+                self.batch_size,
+                generator,
+            )
+            future_indices = self._sample_indices(
+                len(self.future_target),
+                self.batch_size,
+                generator,
+            )
+            source_batch = self.source.take(source_indices)
+
             yield GlobalBatch(
-                total=local.total,
-                new=local.new,
-                old=local.old,
-                ntr=local.ntr,
+                total=source_batch.total,
+                new=source_batch.new,
+                ntr=source_batch.ntr,
                 target_total=self.future_target.take(future_indices),
-                past_target_total=past,
-                past_source=past_source_batch,
-                past_delta_time=self.past_delta_time,
                 delta_time=self.delta_time,
-                labeling_time=local.labeling_time,
+                labeling_time=source_batch.labeling_time,
             )
 
 
 class MixedBatchLoader:
-    """Mix multiple local or global loaders without concatenating their populations."""
+    """Mix multiple local or global loaders without concatenating populations."""
 
     def __init__(
         self,
@@ -230,11 +232,17 @@ class MixedBatchLoader:
     ):
         if not loaders:
             raise ValueError("At least one loader is required.")
+        if steps_per_epoch < 1:
+            raise ValueError("steps_per_epoch must be >= 1.")
         if weights is None:
             weights = tuple(1.0 for _ in loaders)
         if len(weights) != len(loaders) or any(weight <= 0 for weight in weights):
             raise ValueError("weights must be positive and match the number of loaders.")
-        self.loaders, self.steps_per_epoch, self.weights, self.seed = loaders, steps_per_epoch, weights, seed
+
+        self.loaders = loaders
+        self.steps_per_epoch = steps_per_epoch
+        self.weights = weights
+        self.seed = seed
         self._epoch = 0
 
     def __len__(self) -> int:
@@ -246,6 +254,7 @@ class MixedBatchLoader:
         probabilities = torch.tensor(self.weights, dtype=torch.float32)
         probabilities = probabilities / probabilities.sum()
         iterators = [iter(loader) for loader in self.loaders]
+
         for _ in range(self.steps_per_epoch):
             index = int(torch.multinomial(probabilities, 1, generator=generator))
             try:

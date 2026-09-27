@@ -1,14 +1,16 @@
 from trajectoryflow.models.dual_scale.components import (
-    ConditionalVelocityDenoiser,
-    GaussianTransition,
-    KineticAlignmentHead,
-    LatentDiffusionTransition,
     MLPStateDecoder,
-    MLPStateEncoder,
-    MultiModalKineticEncoder,
+    NullKineticEncoder,
     PositiveLowRankGeneHead,
+    ResidualMLPBlock,
+    StateWithNTREncoder,
+    StochasticResidualTransition,
+    StochasticResidualTransitionOutput,
+    TotalKineticEncoder,
 )
-from trajectoryflow.models.dual_scale.config import DualScaleModelConfig
+from trajectoryflow.models.dual_scale.config import (
+    DualScaleModelConfig,
+)
 from trajectoryflow.models.dual_scale.model import (
     DualScaleKineticTransitionModel,
     GlobalOutputs,
@@ -16,18 +18,19 @@ from trajectoryflow.models.dual_scale.model import (
     build_default_dual_scale_model,
 )
 
+
 __all__ = [
-    "ConditionalVelocityDenoiser",
     "DualScaleKineticTransitionModel",
     "DualScaleModelConfig",
-    "GaussianTransition",
     "GlobalOutputs",
-    "KineticAlignmentHead",
-    "LatentDiffusionTransition",
     "LocalOutputs",
     "MLPStateDecoder",
-    "MLPStateEncoder",
-    "MultiModalKineticEncoder",
+    "NullKineticEncoder",
     "PositiveLowRankGeneHead",
+    "ResidualMLPBlock",
+    "StateWithNTREncoder",
+    "StochasticResidualTransition",
+    "StochasticResidualTransitionOutput",
+    "TotalKineticEncoder",
     "build_default_dual_scale_model",
 ]

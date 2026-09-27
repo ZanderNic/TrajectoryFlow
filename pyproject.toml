@@ -31,6 +31,7 @@ dependencies = [
     "tqdm",
     "torch",
     "scikit-learn",
+    "scFates"
 ]
 
 [project.optional-dependencies]

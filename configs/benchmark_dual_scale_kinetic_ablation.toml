@@ -1,6 +1,6 @@
 data_root = "data/processed/scifate2"
-output_dir = "runs/dual_scale_ablation"
-seeds = [0]
+output_dir = "runs/dual_scale_kinetic_ablation"
+seeds = [0, 1, 2]
 fail_fast = true
 save_checkpoints = true
 save_predictions = true
@@ -22,22 +22,33 @@ prediction_timing_runs = 1
 [evaluation.space]
 transform = "none"
 
-# 1) Free diffusion: no gene-space, past-direction, or kinetic-direction auxiliary loss.
+# ------------------------------------------------------------
+# 2x2 factorial ablation
+# Factor A: use_kinetic_encoder = false / true
+# Factor B: local_kinetic loss weight = 0 / 1
+# Reconstruction and population SW are identical in all runs.
+# ------------------------------------------------------------
+
+# A0 B0: no cell-specific kinetic branch, no local kinetic supervision.
 [[models]]
-name = "dual_scale_free"
+name = "dual_scale_no_kin_no_local"
 
 [models.model_params]
 latent_dim = 64
 kinetic_dim = 32
+use_kinetic_encoder = false
 state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
-kinetic_projection_dim = 96
+state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
 transition_type = "diffusion"
 transition_hidden_dims = [192, 192]
 diffusion_time_embedding_dim = 32
 diffusion_sample_steps = 8
 diffusion_cosine_offset = 0.008
+initial_production = 0.1
+initial_degradation = 0.1
+max_degradation = 3.0
 time_scale_hours = 2.0
 
 [models.trainer_params]
@@ -47,12 +58,7 @@ labeling_time = 2.0
 learning_rate = 0.001
 weight_decay = 0.00001
 global_samples = 1
-distribution_space = "latent"
-sw_projections = 64
-gene_sw_projections = 16
-kinetic_direction_step_hours = 0.25
-alignment_start_epoch = 20
-detach_alignment_teacher = true
+sw_projections = 16
 
 [models.trainer_params.schedule]
 local_pretrain_epochs = 20
@@ -66,31 +72,29 @@ joint_cycles_per_epoch = 100
 
 [models.trainer_params.loss_weights]
 reconstruction = 1.0
-new_rna = 1.0
-gamma_regularization = 0.001
-future_sliced_wasserstein = 1.0
-future_mmd = 0.1
-future_gene_sliced_wasserstein = 0.0
-past_direction_alignment = 0.0
-kinetic_direction_alignment = 0.0
-transition_regularization = 0.0
+local_kinetic = 0.0
+population_sliced_wasserstein = 1.0
 
-# 2) Free diffusion + raw gene-space future SW.
+# A1 B0: kinetic encoder present, but learned only through population SW.
 [[models]]
-name = "dual_scale_gene"
+name = "dual_scale_kin_no_local"
 
 [models.model_params]
 latent_dim = 64
 kinetic_dim = 32
+use_kinetic_encoder = true
 state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
-kinetic_projection_dim = 96
+state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
 transition_type = "diffusion"
 transition_hidden_dims = [192, 192]
 diffusion_time_embedding_dim = 32
 diffusion_sample_steps = 8
 diffusion_cosine_offset = 0.008
+initial_production = 0.1
+initial_degradation = 0.1
+max_degradation = 3.0
 time_scale_hours = 2.0
 
 [models.trainer_params]
@@ -100,12 +104,7 @@ labeling_time = 2.0
 learning_rate = 0.001
 weight_decay = 0.00001
 global_samples = 1
-distribution_space = "latent"
-sw_projections = 64
-gene_sw_projections = 16
-kinetic_direction_step_hours = 0.25
-alignment_start_epoch = 20
-detach_alignment_teacher = true
+sw_projections = 16
 
 [models.trainer_params.schedule]
 local_pretrain_epochs = 20
@@ -119,31 +118,30 @@ joint_cycles_per_epoch = 100
 
 [models.trainer_params.loss_weights]
 reconstruction = 1.0
-new_rna = 1.0
-gamma_regularization = 0.001
-future_sliced_wasserstein = 1.0
-future_mmd = 0.1
-future_gene_sliced_wasserstein = 0.01
-past_direction_alignment = 0.0
-kinetic_direction_alignment = 0.0
-transition_regularization = 0.0
+local_kinetic = 0.0
+population_sliced_wasserstein = 1.0
 
-# 3) + past directional supervision from the previous observed population.
+# A0 B1: local kinetic objective exists, but without a cell-specific kinetic encoder.
+# The alpha/gamma heads can only learn gene-wise baselines; this is a useful negative control.
 [[models]]
-name = "dual_scale_gene_past"
+name = "dual_scale_no_kin_local"
 
 [models.model_params]
 latent_dim = 64
 kinetic_dim = 32
+use_kinetic_encoder = false
 state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
-kinetic_projection_dim = 96
+state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
 transition_type = "diffusion"
 transition_hidden_dims = [192, 192]
 diffusion_time_embedding_dim = 32
 diffusion_sample_steps = 8
 diffusion_cosine_offset = 0.008
+initial_production = 0.1
+initial_degradation = 0.1
+max_degradation = 3.0
 time_scale_hours = 2.0
 
 [models.trainer_params]
@@ -153,12 +151,7 @@ labeling_time = 2.0
 learning_rate = 0.001
 weight_decay = 0.00001
 global_samples = 1
-distribution_space = "latent"
-sw_projections = 64
-gene_sw_projections = 16
-kinetic_direction_step_hours = 0.25
-alignment_start_epoch = 20
-detach_alignment_teacher = true
+sw_projections = 16
 
 [models.trainer_params.schedule]
 local_pretrain_epochs = 20
@@ -172,31 +165,29 @@ joint_cycles_per_epoch = 100
 
 [models.trainer_params.loss_weights]
 reconstruction = 1.0
-new_rna = 1.0
-gamma_regularization = 0.001
-future_sliced_wasserstein = 1.0
-future_mmd = 0.1
-future_gene_sliced_wasserstein = 0.01
-past_direction_alignment = 0.1
-kinetic_direction_alignment = 0.0
-transition_regularization = 0.0
+local_kinetic = 1.0
+population_sliced_wasserstein = 1.0
 
-# 4) + the desired local kinetic-direction prior on the predicted transition.
+# A1 B1: full three-objective model.
 [[models]]
-name = "dual_scale_direction"
+name = "dual_scale_full"
 
 [models.model_params]
 latent_dim = 64
 kinetic_dim = 32
+use_kinetic_encoder = true
 state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
-kinetic_projection_dim = 96
+state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
 transition_type = "diffusion"
 transition_hidden_dims = [192, 192]
 diffusion_time_embedding_dim = 32
 diffusion_sample_steps = 8
 diffusion_cosine_offset = 0.008
+initial_production = 0.1
+initial_degradation = 0.1
+max_degradation = 3.0
 time_scale_hours = 2.0
 
 [models.trainer_params]
@@ -206,12 +197,7 @@ labeling_time = 2.0
 learning_rate = 0.001
 weight_decay = 0.00001
 global_samples = 1
-distribution_space = "latent"
-sw_projections = 64
-gene_sw_projections = 16
-kinetic_direction_step_hours = 0.25
-alignment_start_epoch = 20
-detach_alignment_teacher = true
+sw_projections = 16
 
 [models.trainer_params.schedule]
 local_pretrain_epochs = 20
@@ -225,14 +211,8 @@ joint_cycles_per_epoch = 100
 
 [models.trainer_params.loss_weights]
 reconstruction = 1.0
-new_rna = 1.0
-gamma_regularization = 0.001
-future_sliced_wasserstein = 1.0
-future_mmd = 0.1
-future_gene_sliced_wasserstein = 0.01
-past_direction_alignment = 0.1
-kinetic_direction_alignment = 0.1
-transition_regularization = 0.0
+local_kinetic = 1.0
+population_sliced_wasserstein = 1.0
 
 [[splits]]
 name = "extrapolation_15h_to_20h"
