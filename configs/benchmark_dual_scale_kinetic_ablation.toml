@@ -1,6 +1,7 @@
 data_root = "data/processed/scifate2"
 output_dir = "runs/dual_scale_kinetic_ablation"
-seeds = [0, 1, 2]
+seeds = [0]
+
 fail_fast = true
 save_checkpoints = true
 save_predictions = true
@@ -22,14 +23,9 @@ prediction_timing_runs = 1
 [evaluation.space]
 transform = "none"
 
-# ------------------------------------------------------------
-# 2x2 factorial ablation
-# Factor A: use_kinetic_encoder = false / true
-# Factor B: local_kinetic loss weight = 0 / 1
-# Reconstruction and population SW are identical in all runs.
-# ------------------------------------------------------------
-
-# A0 B0: no cell-specific kinetic branch, no local kinetic supervision.
+# ============================================================
+# A0 B0: no kinetic encoder, no local kinetic objective
+# ============================================================
 [[models]]
 name = "dual_scale_no_kin_no_local"
 
@@ -41,15 +37,13 @@ state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
 state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
-transition_type = "diffusion"
-transition_hidden_dims = [192, 192]
-diffusion_time_embedding_dim = 32
-diffusion_sample_steps = 8
-diffusion_cosine_offset = 0.008
+transition_noise_dim = 32
+transition_hidden_dim = 256
+transition_blocks = 2
 initial_production = 0.1
 initial_degradation = 0.1
 max_degradation = 3.0
-time_scale_hours = 2.0
+time_scale_hours = 5.0
 
 [models.trainer_params]
 local_batch_size = 128
@@ -75,7 +69,9 @@ reconstruction = 1.0
 local_kinetic = 0.0
 population_sliced_wasserstein = 1.0
 
-# A1 B0: kinetic encoder present, but learned only through population SW.
+# ============================================================
+# A1 B0: kinetic encoder, no local kinetic objective
+# ============================================================
 [[models]]
 name = "dual_scale_kin_no_local"
 
@@ -87,15 +83,13 @@ state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
 state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
-transition_type = "diffusion"
-transition_hidden_dims = [192, 192]
-diffusion_time_embedding_dim = 32
-diffusion_sample_steps = 8
-diffusion_cosine_offset = 0.008
+transition_noise_dim = 32
+transition_hidden_dim = 256
+transition_blocks = 2
 initial_production = 0.1
 initial_degradation = 0.1
 max_degradation = 3.0
-time_scale_hours = 2.0
+time_scale_hours = 5.0
 
 [models.trainer_params]
 local_batch_size = 128
@@ -121,8 +115,9 @@ reconstruction = 1.0
 local_kinetic = 0.0
 population_sliced_wasserstein = 1.0
 
-# A0 B1: local kinetic objective exists, but without a cell-specific kinetic encoder.
-# The alpha/gamma heads can only learn gene-wise baselines; this is a useful negative control.
+# ============================================================
+# A0 B1: no kinetic encoder, local kinetic objective enabled
+# ============================================================
 [[models]]
 name = "dual_scale_no_kin_local"
 
@@ -134,15 +129,13 @@ state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
 state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
-transition_type = "diffusion"
-transition_hidden_dims = [192, 192]
-diffusion_time_embedding_dim = 32
-diffusion_sample_steps = 8
-diffusion_cosine_offset = 0.008
+transition_noise_dim = 32
+transition_hidden_dim = 256
+transition_blocks = 2
 initial_production = 0.1
 initial_degradation = 0.1
 max_degradation = 3.0
-time_scale_hours = 2.0
+time_scale_hours = 5.0
 
 [models.trainer_params]
 local_batch_size = 128
@@ -168,7 +161,9 @@ reconstruction = 1.0
 local_kinetic = 1.0
 population_sliced_wasserstein = 1.0
 
-# A1 B1: full three-objective model.
+# ============================================================
+# A1 B1: full model
+# ============================================================
 [[models]]
 name = "dual_scale_full"
 
@@ -180,15 +175,13 @@ state_hidden_dims = [512, 256]
 decoder_hidden_dims = [256, 512]
 state_projection_dim = 128
 kinetic_hidden_dims = [256, 128]
-transition_type = "diffusion"
-transition_hidden_dims = [192, 192]
-diffusion_time_embedding_dim = 32
-diffusion_sample_steps = 8
-diffusion_cosine_offset = 0.008
+transition_noise_dim = 32
+transition_hidden_dim = 256
+transition_blocks = 2
 initial_production = 0.1
 initial_degradation = 0.1
 max_degradation = 3.0
-time_scale_hours = 2.0
+time_scale_hours = 5.0
 
 [models.trainer_params]
 local_batch_size = 128
@@ -214,6 +207,9 @@ reconstruction = 1.0
 local_kinetic = 1.0
 population_sliced_wasserstein = 1.0
 
+# ============================================================
+# Strict extrapolation: train 5h,10h,15h -> test 15h->20h
+# ============================================================
 [[splits]]
 name = "extrapolation_15h_to_20h"
 fit_timepoints = ["5h", "10h", "15h"]
