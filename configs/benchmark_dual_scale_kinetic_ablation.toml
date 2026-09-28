@@ -1,32 +1,34 @@
-local_batch_size = 128
-global_batch_size = 256
-labeling_time = 2.0
-learning_rate = 0.001
-weight_decay = 0.00001
-global_samples = 4
-sw_projections = 128
+data_root = "data/processed/scifate2"
+output_dir = "runs/dual_scale_kinetic_ablation_fair"
+seeds = [0, 1, 2]
 
-[models.trainer_params.schedule]
-local_pretrain_epochs = 20
-global_pretrain_epochs = 0
-joint_epochs = 100
-local_steps_per_pretrain_epoch = 100
-global_steps_per_pretrain_epoch = 0
-local_steps_per_joint_cycle = 2
-global_steps_per_joint_cycle = 1
-joint_cycles_per_epoch = 100
+fail_fast = true
+save_checkpoints = true
+save_predictions = true
 
-[models.trainer_params.loss_weights]
-reconstruction = 1.0
-local_kinetic = 0.0
-population_sliced_wasserstein = 1.0
+[runtime]
+device = "auto"
+deterministic = true
+precision = "float32"
+store_cache_size = 0
+
+[evaluation]
+n_source_cells = 1000
+n_target_cells = 1000
+n_samples = 5
+sample_batch_size = 1
+prediction_warmup_runs = 0
+prediction_timing_runs = 1
+
+[evaluation.space]
+transform = "none"
 
 # ============================================================
-# A0 B1: no kinetic encoder, local kinetic objective enabled
+# A0 B0: no kinetic encoder, no local kinetic objective
 # ============================================================
 
 [[models]]
-name = "dual_scale_no_kin_local"
+name = "dual_scale_no_kin_no_local"
 
 [models.model_params]
 latent_dim = 64
@@ -65,15 +67,15 @@ joint_cycles_per_epoch = 100
 
 [models.trainer_params.loss_weights]
 reconstruction = 1.0
-local_kinetic = 1.0
+local_kinetic = 0.0
 population_sliced_wasserstein = 1.0
 
 # ============================================================
-# A1 B1: full model
+# A1 B0: kinetic encoder, no local kinetic objective
 # ============================================================
 
 [[models]]
-name = "dual_scale_full"
+name = "dual_scale_kin_no_local"
 
 [models.model_params]
 latent_dim = 64
@@ -92,37 +94,3 @@ max_degradation = 3.0
 time_scale_hours = 5.0
 
 [models.trainer_params]
-local_batch_size = 128
-global_batch_size = 256
-labeling_time = 2.0
-learning_rate = 0.001
-weight_decay = 0.00001
-global_samples = 4
-sw_projections = 128
-
-[models.trainer_params.schedule]
-local_pretrain_epochs = 20
-global_pretrain_epochs = 0
-joint_epochs = 100
-local_steps_per_pretrain_epoch = 100
-global_steps_per_pretrain_epoch = 0
-local_steps_per_joint_cycle = 2
-global_steps_per_joint_cycle = 1
-joint_cycles_per_epoch = 100
-
-[models.trainer_params.loss_weights]
-reconstruction = 1.0
-local_kinetic = 1.0
-population_sliced_wasserstein = 1.0
-
-# ============================================================
-# Strict extrapolation: train on 5h, 10h, 15h; test 15h -> 20h
-# ============================================================
-
-[[splits]]
-name = "extrapolation_15h_to_20h"
-fit_timepoints = ["5h", "10h", "15h"]
-
-[[splits.test_tasks]]
-name = "15h_to_20h"
-source = "15h"
