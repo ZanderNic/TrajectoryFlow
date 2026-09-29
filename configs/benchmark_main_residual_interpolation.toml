@@ -83,12 +83,12 @@ time_scale_hours = 5.0
 
 [models.trainer_params]
 local_batch_size = 128
-global_batch_size = 128
+global_batch_size = 256
+global_samples = 16
+sw_projections = 128
 labeling_time = 2.0
 learning_rate = 0.001
 weight_decay = 0.00001
-global_samples = 1
-sw_projections = 16
 
 [models.trainer_params.schedule]
 local_pretrain_epochs = 20
@@ -108,12 +108,31 @@ population_sliced_wasserstein = 1.0
 # ============================================================
 # Main paper split
 # ============================================================
+# ============================================================
+# Missing-middle interpolation
+#
+# 144h is completely hidden during training.
+# The model sees all other timepoints, including 120h and 168h,
+# and must predict the missing intermediate 144h population.
+# ============================================================
+
 [[splits]]
-name = "extrapolation_15h_to_20h"
-fit_timepoints = ["5h", "10h", "15h"]
+name = "interpolation_120h_to_144h"
+
+fit_timepoints = [
+    "5h",
+    "10h",
+    "15h",
+    "20h",
+    "72h",
+    "96h",
+    "120h",
+    "168h",
+    "192h"
+]
 
 [[splits.test_tasks]]
-name = "15h_to_20h"
-source = "15h"
-target = "20h"
-kind = "extrapolation"
+name = "120h_to_144h"
+source = "120h"
+target = "144h"
+kind = "interpolation"
