@@ -677,6 +677,6 @@ https://github.com/rorymaizels/velvetVAE
 
 # AI assistance
 
-OpenAI ChatGPT (GPT-5.6 Sol) was used as an AI-assisted tool during this project. It supported parts of the software implementation, including code generation, refactoring, debugging, and documentation. ChatGPT was also used for language editing and for rewriting or reformulating parts of the accompanying manuscript to improve clarity and scientific presentation.
+OpenAI ChatGPT (GPT-5.6 Sol) was used as an AI-assisted tool during this project. It supported big parts of the software implementation, including code generation, refactoring, debugging, and documentation.
 
 All methodological decisions, experimental design, interpretation of results, verification of sources, and final project content were reviewed and determined by the author.
