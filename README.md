@@ -152,7 +152,7 @@ Generated states should be interpreted as **plausible stochastic futures that ar
 ## 1. Clone and create an environment
 
 ```bash
-git clone <YOUR-REPOSITORY-URL>
+git clone https://github.com/ZanderNic/TrajectoryFlow
 cd TrajectoryFlow
 python3 -m venv .venv
 source .venv/bin/activate
