@@ -67,16 +67,6 @@ $$
 
 Training combines three objectives:
 
-$$
-\mathcal{L}
-=
-\lambda_{\mathrm{rec}}\mathcal{L}_{\mathrm{rec}}
-+
-\lambda_{\mathrm{kin}}\mathcal{L}_{\mathrm{kin}}
-+
-\lambda_{\mathrm{SW}}\mathcal{L}_{\mathrm{SW}}.
-$$
-
 - **Reconstruction loss** preserves the current cell state.
 - **Kinetic loss** makes the kinetic representation predictive of newly synthesized RNA.
 - **Sliced-Wasserstein loss** matches generated and observed future populations without introducing artificial cell pairs.
