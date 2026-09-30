@@ -1,13 +1,6 @@
-<p align="center">
-  <h1 align="center">TrajectoryFlow</h1>
-  <p align="center">
-    <strong>Kinetically guided stochastic population forecasting from metabolic-labeling single-cell RNA</strong>
-  </p>
-  <p align="center">
-    A research framework for learning future cell-state distributions from time-resolved SCI-FATE2 snapshots without assuming cell-to-cell correspondences across time.
-  </p>
-</p>
-
+<h1 align="center">TrajectoryFlow</h1>
+<p align="center"><strong>Kinetically guided stochastic population forecasting from metabolic-labeling single-cell RNA</strong></p>
+<p align="center">A research framework for learning future cell-state distributions from time-resolved SCI-FATE2 snapshots without assuming cell-to-cell correspondences across time.</p>
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white">
   <img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-models-EE4C2C?logo=pytorch&logoColor=white">
@@ -30,51 +23,51 @@ The main model is a **dual-scale stochastic residual model**. It combines:
 
 The current implementation does **not** use the earlier latent-diffusion transition. The generative transition is now a direct stochastic residual MLP.
 
-The central setting is difficult because single-cell measurements are destructive: cells measured at time \(t\) are not the same cells measured at \(t+\Delta t\). TrajectoryFlow therefore treats timepoints as **unpaired populations**, not as known cell lineages.
+The central setting is difficult because single-cell measurements are destructive: cells measured at time $t$ are not the same cells measured at $t+\Delta t$. TrajectoryFlow therefore treats timepoints as **unpaired populations**, not as known cell lineages.
 
 ---
 
 ## Core idea
 
-For a source cell at time \(t\),
+For a source cell at time $t$,
 
-\[
+$$
 z_t = E_{\mathrm{state}}(x_t, r_t)
-\]
+$$
 
 represents the current state, while
 
-\[
+$$
 k_t = E_{\mathrm{kin}}(x_t)
-\]
+$$
 
 represents local transcriptional information.
 
 The future latent state is generated through a stochastic residual transition,
 
-\[
+$$
 \epsilon \sim \mathcal{N}(0,I),
-\]
+$$
 
-\[
+$$
 \Delta z =
 \Delta t\,
 G_\theta(z_t,k_t,\Delta t,\epsilon),
-\]
+$$
 
-\[
+$$
 z_{t+\Delta t}=z_t+\Delta z.
-\]
+$$
 
 The future total-RNA state is then decoded as
 
-\[
+$$
 \hat{x}_{t+\Delta t}=D(z_{t+\Delta t}).
-\]
+$$
 
 Training combines three objectives:
 
-\[
+$$
 \mathcal{L}
 =
 \lambda_{\mathrm{rec}}\mathcal{L}_{\mathrm{rec}}
@@ -82,7 +75,7 @@ Training combines three objectives:
 \lambda_{\mathrm{kin}}\mathcal{L}_{\mathrm{kin}}
 +
 \lambda_{\mathrm{SW}}\mathcal{L}_{\mathrm{SW}}.
-\]
+$$
 
 - **Reconstruction loss** preserves the current cell state.
 - **Kinetic loss** makes the kinetic representation predictive of newly synthesized RNA.
@@ -90,31 +83,25 @@ Training combines three objectives:
 
 ```mermaid
 flowchart LR
-    X["Total RNA x_t"] --> S["State encoder"]
-    R["NTR r_t"] --> S
-    X --> K["Kinetic encoder"]
-
-    S --> Z["State latent z_t"]
-    K --> KT["Kinetic latent k_t"]
-
-    KT --> AG["alpha / gamma"]
-    AG --> N["Predicted new RNA"]
-    N --> LK["Local kinetic loss"]
-
-    Z --> G["Stochastic residual transition"]
-    KT --> G
-    DT["Delta t"] --> G
-    E["epsilon ~ N(0,I)"] --> G
-
-    G --> DZ["Delta z"]
-    Z --> ADD["z_t + Delta z"]
-    DZ --> ADD
-
-    ADD --> D["State decoder"]
-    D --> XF["Generated future population"]
-
-    TARGET["Observed future population"] --> SW["Sliced-Wasserstein loss"]
-    XF --> SW
+   X["Total RNA x_t"] --> S["State encoder"]
+   R["NTR r_t"] --> S
+   X --> K["Kinetic encoder"]
+   S --> Z["State latent z_t"]
+   K --> KT["Kinetic latent k_t"]
+   KT --> AG["alpha / gamma"]
+   AG --> N["Predicted new RNA"]
+   N --> LK["Local kinetic loss"]
+   Z --> G["Stochastic residual transition"]
+   KT --> G
+   DT["Delta t"] --> G
+   E["epsilon ~ N(0,I)"] --> G
+   G --> DZ["Delta z"]
+   Z --> ADD["z_t + Delta z"]
+   DZ --> ADD
+   ADD --> D["State decoder"]
+   D --> XF["Generated future population"]
+   TARGET["Observed future population"] --> SW["Sliced-Wasserstein loss"]
+   XF --> SW
 ```
 
 ---
@@ -177,10 +164,8 @@ Generated states should be interpreted as **plausible stochastic futures that ar
 ```bash
 git clone <YOUR-REPOSITORY-URL>
 cd TrajectoryFlow
-
 python3 -m venv .venv
 source .venv/bin/activate
-
 python -m pip install --upgrade pip
 pip install -e .
 ```
@@ -218,33 +203,33 @@ This is equivalent to:
 
 ```bash
 python scripts/download_scifate2.py \
-    --dataset estimate \
-    --work-dir data/raw \
-    --output-dir data/processed/scifate2 \
-    --top-genes-by-detection 10000
+   --dataset estimate \
+   --work-dir data/raw \
+   --output-dir data/processed/scifate2 \
+   --top-genes-by-detection 10000
 ```
 
 To additionally reconstruct and merge the authors' published cell annotations:
 
 ```bash
 python scripts/download_scifate2.py \
-    --dataset estimate \
-    --authors-cell-types
+   --dataset estimate \
+   --authors-cell-types
 ```
 
 If disk space is limited, the downloaded H5AD can be removed after preprocessing:
 
 ```bash
 python scripts/download_scifate2.py \
-    --dataset estimate \
-    --delete-h5ad
+   --dataset estimate \
+   --delete-h5ad
 ```
 
 To preprocess an already downloaded H5AD instead:
 
 ```bash
 python scripts/download_scifate2.py \
-    --h5ad-path /path/to/file.h5ad
+   --h5ad-path /path/to/file.h5ad
 ```
 
 Useful options include:
@@ -312,7 +297,6 @@ Useful flags:
 ```bash
 # Start from a clean output directory
 python scripts/run_benchmark.py path/to/config.toml --overwrite
-
 # Resume completed experiments when config/data/code still match
 python scripts/run_benchmark.py path/to/config.toml --resume
 ```
@@ -351,15 +335,15 @@ Run:
 
 ```bash
 python scripts/run_benchmark.py \
-    configs/benchmark_main_stochastic_residual.toml \
-    --overwrite
+   configs/benchmark_main_stochastic_residual.toml \
+   --overwrite
 ```
 
 ---
 
 ## Kinetic ablation study
 
-The ablation study uses a \(2\times2\) design:
+The ablation study uses a $2\times2$ design:
 
 | Model | Kinetic encoder | Local kinetic loss |
 |---|---:|---:|
@@ -380,8 +364,8 @@ Run:
 
 ```bash
 python scripts/run_benchmark.py \
-    configs/benchmark_dual_scale_kinetic_ablation_stochastic.toml \
-    --overwrite
+   configs/benchmark_dual_scale_kinetic_ablation_stochastic.toml \
+   --overwrite
 ```
 
 > **Important:** NTR is already an input to the state encoder. The ablation therefore measures the additional contribution of the separately supervised kinetic branch, not the total contribution of metabolic-labeling information.
@@ -409,13 +393,13 @@ Individual runs are organized by model, split and seed:
 ```text
 runs/<benchmark>/
 └── <model>/
-    └── <split>/
-        └── seed_<N>/
-            ├── result.json
-            ├── metrics.csv
-            ├── runtime.csv
-            ├── predictions/
-            └── ...
+   └── <split>/
+       └── seed_<N>/
+           ├── result.json
+           ├── metrics.csv
+           ├── runtime.csv
+           ├── predictions/
+           └── ...
 ```
 
 Checkpoints and predictions are controlled through the benchmark config:
@@ -433,7 +417,7 @@ After a benchmark has finished:
 
 ```bash
 python scripts/analyze_benchmark.py \
-    runs/main_benchmark_15h_to_20h
+   runs/main_benchmark_15h_to_20h
 ```
 
 The analysis is written to:
@@ -457,18 +441,18 @@ The analysis aggregates seeds, computes mean/std/median values, creates metric-w
 
 ```bash
 python scripts/plot_benchmark.py \
-    runs/main_benchmark_15h_to_20h
+   runs/main_benchmark_15h_to_20h
 ```
 
 Optional arguments:
 
 ```bash
 python scripts/plot_benchmark.py \
-    runs/main_benchmark_15h_to_20h \
-    --phase test \
-    --seed 0 \
-    --prediction-sample 0 \
-    --max-cells 3000
+   runs/main_benchmark_15h_to_20h \
+   --phase test \
+   --seed 0 \
+   --prediction-sample 0 \
+   --max-cells 3000
 ```
 
 The plotting pipeline can create metric comparisons, forecast visualizations, efficiency summaries, cell-type composition plots and velocity/direction figures when the required data are available.
@@ -479,24 +463,24 @@ For training curves and checkpoint diagnostics:
 
 ```bash
 python scripts/plot_dual_scale.py \
-    runs/dual_scale_kinetic_ablation
+   runs/dual_scale_kinetic_ablation
 ```
 
 To inspect one split/seed:
 
 ```bash
 python scripts/plot_dual_scale.py \
-    runs/dual_scale_kinetic_ablation \
-    --split extrapolation_15h_to_20h \
-    --seed 0
+   runs/dual_scale_kinetic_ablation \
+   --split extrapolation_15h_to_20h \
+   --seed 0
 ```
 
 Training-log plots only:
 
 ```bash
 python scripts/plot_dual_scale.py \
-    runs/dual_scale_kinetic_ablation \
-    --training-only
+   runs/dual_scale_kinetic_ablation \
+   --training-only
 ```
 
 ---
@@ -635,7 +619,6 @@ The default paper experiments use:
 
 ```toml
 seeds = [0, 1, 2]
-
 [runtime]
 device = "auto"
 deterministic = true
@@ -678,7 +661,7 @@ The current study focuses on SCI-FATE2 and population-level forecasting. In part
 - cross-time supervision is distributional rather than cell-paired,
 - the model does not recover experimentally observed individual trajectories,
 - stochastic predictions are not lineage assignments,
-- the learned \(\alpha\) and \(\gamma\) values are effective kinetic parameters rather than uniquely identified biological rates,
+- the learned $\alpha$ and $\gamma$ values are effective kinetic parameters rather than uniquely identified biological rates,
 - the current main evaluation is a strict early-time extrapolation experiment,
 - generalization to other biological systems requires additional datasets and experiments.
 
@@ -688,10 +671,12 @@ The current study focuses on SCI-FATE2 and population-level forecasting. In part
 
 **SCI-FATE2 / Velvet**
 
-R. Maizels et al., *Reconstructing developmental trajectories using latent dynamical systems and time-resolved transcriptomics*, Cell Systems, 2024.  
+R. Maizels et al., **Reconstructing developmental trajectories using latent dynamical systems and time-resolved transcriptomics**, Cell Systems, 2024.
+
 https://doi.org/10.1016/j.cels.2024.04.004
 
-Dataset:  
+Dataset:
+
 https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE236512
 
 **Official Velvet implementation**
