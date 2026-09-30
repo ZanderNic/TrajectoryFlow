@@ -96,57 +96,6 @@ flowchart LR
 
 ---
 
-## What is included
-
-TrajectoryFlow currently provides:
-
-- SCI-FATE2 download and preprocessing
-- sparse timepoint-wise dataset storage
-- total RNA, newly synthesized RNA and NTR handling
-- a dual-scale stochastic residual model
-- local kinetic supervision through effective production/degradation parameters
-- population-level unpaired training
-- a no-change baseline
-- a TrajectoryFlow implementation of VelvetVAE + VelvetSDE
-- reproducible TOML-based benchmark definitions
-- temporal holdout and extrapolation experiments
-- multi-seed benchmarking
-- population-level evaluation metrics
-- benchmark aggregation and ranking
-- paper-ready benchmark plots
-- dual-scale training/checkpoint diagnostics
-- optional velocity/direction-reference utilities
-- tests for data, models, training, evaluation and experiment infrastructure
-
-The default population metrics include:
-
-- Sliced-Wasserstein distance
-- Maximum Mean Discrepancy (MMD)
-- Chamfer distance
-- centroid distance
-- mean-expression error
-- variance error
-- mean and variance correlations
-- dispersion error
-
----
-
-## What the project does **not** assume
-
-TrajectoryFlow intentionally does **not** assume that a cell measured at one timepoint has a known matching cell at a later timepoint.
-
-It also does not claim to:
-
-- reconstruct ground-truth individual cell lineages,
-- uniquely identify biological production and degradation rates from one labeling interval,
-- use an explicitly integrated velocity field in the proposed dual-scale model,
-- use latent diffusion in the current proposed model,
-- treat generated trajectories as experimentally observed trajectories.
-
-Generated states should be interpreted as **plausible stochastic futures that are consistent with observed population dynamics**.
-
----
-
 # Quick start
 
 ## 1. Clone and create an environment
@@ -279,9 +228,6 @@ Benchmarks are defined in TOML files and executed with:
 ```bash
 python scripts/run_benchmark.py path/to/config.toml
 ```
-
-The benchmark runner records the config, dataset fingerprints, code hashes, runtime information, metrics and per-run artifacts.
-
 Useful flags:
 
 ```bash
@@ -359,141 +305,6 @@ python scripts/run_benchmark.py \
 ```
 
 > **Important:** NTR is already an input to the state encoder. The ablation therefore measures the additional contribution of the separately supervised kinetic branch, not the total contribution of metabolic-labeling information.
-
----
-
-# Benchmark outputs
-
-A benchmark run produces an output directory such as:
-
-```text
-runs/main_benchmark_15h_to_20h/
-├── benchmark_config.toml
-├── benchmark_manifest.json
-├── metrics.csv
-├── runtimes.csv
-├── experiments.csv
-├── no_change/
-├── velvet/
-└── dual_scale_full/
-```
-
-Individual runs are organized by model, split and seed:
-
-```text
-runs/<benchmark>/
-└── <model>/
-   └── <split>/
-       └── seed_<N>/
-           ├── result.json
-           ├── metrics.csv
-           ├── runtime.csv
-           ├── predictions/
-           └── ...
-```
-
-Checkpoints and predictions are controlled through the benchmark config:
-
-```toml
-save_checkpoints = true
-save_predictions = true
-```
-
----
-
-# Analyze a completed benchmark
-
-After a benchmark has finished:
-
-```bash
-python scripts/analyze_benchmark.py \
-   runs/main_benchmark_15h_to_20h
-```
-
-The analysis is written to:
-
-```text
-runs/main_benchmark_15h_to_20h/analysis/
-├── metric_summary.csv
-├── runtime_summary.csv
-├── experiment_summary.csv
-├── rankings.csv
-└── paired_comparisons.csv
-```
-
-The analysis aggregates seeds, computes mean/std/median values, creates metric-wise rankings, and performs paired seed comparisons between models.
-
----
-
-# Create figures
-
-## Paper-ready benchmark figures
-
-```bash
-python scripts/plot_benchmark.py \
-   runs/main_benchmark_15h_to_20h
-```
-
-Optional arguments:
-
-```bash
-python scripts/plot_benchmark.py \
-   runs/main_benchmark_15h_to_20h \
-   --phase test \
-   --seed 0 \
-   --prediction-sample 0 \
-   --max-cells 3000
-```
-
-The plotting pipeline can create metric comparisons, forecast visualizations, efficiency summaries, cell-type composition plots and velocity/direction figures when the required data are available.
-
-## Dual-scale diagnostics
-
-For training curves and checkpoint diagnostics:
-
-```bash
-python scripts/plot_dual_scale.py \
-   runs/dual_scale_kinetic_ablation
-```
-
-To inspect one split/seed:
-
-```bash
-python scripts/plot_dual_scale.py \
-   runs/dual_scale_kinetic_ablation \
-   --split extrapolation_15h_to_20h \
-   --seed 0
-```
-
-Training-log plots only:
-
-```bash
-python scripts/plot_dual_scale.py \
-   runs/dual_scale_kinetic_ablation \
-   --training-only
-```
-
----
-
-# Optional direction references
-
-TrajectoryFlow also contains utilities for velocity/direction-based evaluation.
-
-These are primarily relevant for methods that expose a velocity prediction and are not required for the main population-forecasting experiment.
-
-Generate direction references:
-
-```bash
-python scripts/prepare_direction_references.py --help
-```
-
-Generate a CBD reference:
-
-```bash
-python scripts/prepare_cbd_reference.py --help
-```
-
-The SCI-FATE2 authors' cell-type transitions can be included through the corresponding command-line options.
 
 ---
 
@@ -584,38 +395,6 @@ TrajectoryFlow/
 ├── data/
 └── runs/
 ```
-
----
-
-# Reproducibility
-
-The benchmark framework is designed to make model comparisons reproducible.
-
-Each benchmark records:
-
-- the benchmark configuration,
-- enabled models,
-- seeds,
-- data manifest and preprocessing hashes,
-- selected-gene indices,
-- code hashes,
-- system information,
-- split fingerprints,
-- runtimes,
-- evaluation metrics,
-- saved predictions/checkpoints when enabled.
-
-The default paper experiments use:
-
-```toml
-seeds = [0, 1, 2]
-[runtime]
-device = "auto"
-deterministic = true
-precision = "float32"
-```
-
-Use `--resume` only when you want completed runs to be reused if their configuration, data, references, split and code still match.
 
 ---
 
